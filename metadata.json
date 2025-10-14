@@ -1,0 +1,7 @@
+{
+  "name": "Dar Ennadjah",
+  "description": "Une application de gestion scolaire pour faciliter la communication et le suivi entre l'école, les parents et les élèves.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
