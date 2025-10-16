@@ -1,4 +1,3 @@
-
 const express = require('express');
 const mysql = require('mysql2/promise');
 const cors = require('cors');
@@ -21,37 +20,39 @@ const transporter = nodemailer.createTransport({
 app.use(express.json({ limit: '10mb' }));
 app.use(cors());
 
-// Configuration de la base de données
+// --- Configuration de la base de données ---
 let pool;
 
-const dbConfig = {
-  host: process.env.DB_HOST,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  database: process.env.DB_NAME,
-  port: process.env.DB_PORT || 3306,
-  waitForConnections: true,
-  connectionLimit: 10,
-  queueLimit: 0
-};
+if (process.env.DATABASE_URL) {
+    console.log("Connexion à la base de données via DATABASE_URL (Mode Production)...");
+    pool = mysql.createPool({
+        uri: process.env.DATABASE_URL,
+        waitForConnections: true,
+        connectionLimit: 10,
+        queueLimit: 0,
+        connectTimeout: 20000,
+    });
+} else {
+    console.log("Connexion à la base de données via les variables DB_* (Mode Développement Local)...");
+    const dbConfig = {
+      host: process.env.DB_HOST || '127.0.0.1',
+      user: process.env.DB_USER,
+      password: process.env.DB_PASSWORD,
+      database: process.env.DB_NAME,
+      port: process.env.DB_PORT || 3306,
+      waitForConnections: true,
+      connectionLimit: 10,
+      queueLimit: 0,
+      connectTimeout: 20000
+    };
+    
+    // Log de la configuration pour le débogage (sans le mot de passe)
+    const { password, ...safeDbConfig } = dbConfig;
+    console.log('Using Local DB Config:', safeDbConfig);
 
-// Log de la configuration pour le débogage (sans le mot de passe)
-const { password, ...safeDbConfig } = dbConfig;
-console.log('Using DB Config:', safeDbConfig);
-
-
-async function connectToDatabase() {
-    try {
-        pool = mysql.createPool(dbConfig);
-        const connection = await pool.getConnection();
-        console.log('✅ Connexion à la base de données réussie.');
-        connection.release();
-    } catch (error) {
-        console.error('❌ Erreur de connexion à la base de données:', error.message);
-        console.log('Nouvelle tentative de connexion dans 5 secondes...');
-        setTimeout(connectToDatabase, 5000);
-    }
+    pool = mysql.createPool(dbConfig);
 }
+
 
 // Fonction pour initialiser la base de données
 async function initializeDatabase() {
@@ -214,6 +215,8 @@ async function initializeDatabase() {
     console.log('✅ Base de données initialisée.');
   } catch (error) {
     console.error('❌ Erreur lors de l\'initialisation de la base de données:', error);
+    // Propager l'erreur pour que le processus de démarrage s'arrête
+    throw error;
   }
 }
 
@@ -360,9 +363,6 @@ app.post('/api/students', asyncHandler(async (req, res) => {
     res.status(201).json({ id: result.insertId, ...req.body });
 }));
 
-// ======================================================================
-// CORRECTION DÉFINITIVE POUR LA SAUVEGARDE DES PHOTOS
-// ======================================================================
 app.put('/api/students/:id', asyncHandler(async (req, res) => {
     const { id } = req.params;
     const { nom, prenom, dateNaissance, classe, niveauScolaire, parentId, isArchived, photoUrl } = req.body;
@@ -552,17 +552,44 @@ app.get('/api/notifications', asyncHandler(async (req, res) => { const [rows] = 
 app.post('/api/notifications/:id/read', asyncHandler(async (req, res) => { await pool.execute('UPDATE notifications SET `read` = TRUE WHERE id = ?', [req.params.id]); res.json({ success: true }); }));
 app.post('/api/notifications/user/:userId/read-all', asyncHandler(async (req, res) => { await pool.execute('UPDATE notifications SET `read` = TRUE WHERE userId = ?', [req.params.userId]); res.json({ success: true }); }));
 
+
 // Gestionnaire d'erreurs final
 app.use((err, req, res, next) => {
     console.error(err.stack);
     res.status(500).json({ message: err.message || 'Une erreur interne est survenue.' });
 });
 
-// Lancement du serveur
-app.listen(PORT, async () => {
-  await connectToDatabase();
-  if (pool) {
-      await initializeDatabase();
-  }
-  console.log(`✅ Serveur prêt et à l'écoute sur le port ${PORT}`);
-});
+// --- Démarrage du serveur ---
+async function startServer() {
+    let retries = 5;
+    while(retries){
+        try {
+            const connection = await pool.getConnection();
+            console.log('✅ Connexion à la base de données réussie.');
+            connection.release();
+            break; // sort de la boucle si la connexion réussit
+        } catch (error) {
+            console.error('❌ Erreur de connexion à la base de données:', error.message);
+            retries -= 1;
+            console.log(`Tentatives restantes: ${retries}. Nouvelle tentative dans 5 secondes...`);
+            if(retries === 0) {
+                 console.error("❌ Impossible de se connecter à la base de données après plusieurs tentatives. Le serveur ne peut pas démarrer.");
+                 process.exit(1);
+            }
+            // Attendre 5 secondes avant la prochaine tentative
+            await new Promise(res => setTimeout(res, 5000));
+        }
+    }
+    
+    try {
+        await initializeDatabase();
+        app.listen(PORT, () => {
+            console.log(`✅ Serveur prêt et à l'écoute sur le port ${PORT}`);
+        });
+    } catch (error) {
+        console.error("❌ Échec du démarrage du serveur lors de l'initialisation:", error.message);
+        process.exit(1);
+    }
+}
+
+startServer();
