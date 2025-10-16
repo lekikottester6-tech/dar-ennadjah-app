@@ -1,3 +1,5 @@
+require('dotenv').config(); // CHARGE LES VARIABLES D'ENVIRONNEMENT DEPUIS .env
+
 // INSTRUCTIONS:
 // 1. Placez ce fichier et `package.json` dans un nouveau dossier `server` à la racine de votre projet.
 // 2. Ouvrez un terminal dans le dossier `server`.
@@ -65,7 +67,130 @@ if (process.env.EMAIL_USER && process.env.EMAIL_PASS) {
 let pool;
 let dbInitializationError = null;
 
-async function initializeDatabase() {
+async function createDatabaseSchema(connection) {
+    console.log("Vérification et création du schéma de la base de données si nécessaire...");
+
+    const createTablesQueries = [
+        `CREATE TABLE IF NOT EXISTS users (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            nom VARCHAR(255) NOT NULL,
+            email VARCHAR(255) NOT NULL UNIQUE,
+            role ENUM('admin', 'parent') NOT NULL,
+            password VARCHAR(255) NOT NULL,
+            telephone VARCHAR(255)
+        );`,
+        `CREATE TABLE IF NOT EXISTS students (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            nom VARCHAR(255) NOT NULL,
+            prenom VARCHAR(255) NOT NULL,
+            dateNaissance DATE,
+            classe VARCHAR(255),
+            niveauScolaire VARCHAR(255),
+            parentId INT,
+            isArchived BOOLEAN DEFAULT false,
+            photoUrl TEXT,
+            FOREIGN KEY (parentId) REFERENCES users(id) ON DELETE SET NULL
+        );`,
+        `CREATE TABLE IF NOT EXISTS teachers (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            nom VARCHAR(255) NOT NULL,
+            prenom VARCHAR(255) NOT NULL,
+            matiere VARCHAR(255),
+            telephone VARCHAR(255),
+            photoUrl TEXT,
+            classes JSON
+        );`,
+        `CREATE TABLE IF NOT EXISTS grades (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            studentId INT NOT NULL,
+            matiere VARCHAR(255) NOT NULL,
+            note FLOAT NOT NULL,
+            coefficient FLOAT NOT NULL,
+            periode VARCHAR(255),
+            date DATE,
+            FOREIGN KEY (studentId) REFERENCES students(id) ON DELETE CASCADE
+        );`,
+        `CREATE TABLE IF NOT EXISTS attendance (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            studentId INT NOT NULL,
+            date DATE NOT NULL,
+            statut VARCHAR(255) NOT NULL,
+            justification TEXT,
+            FOREIGN KEY (studentId) REFERENCES students(id) ON DELETE CASCADE
+        );`,
+        `CREATE TABLE IF NOT EXISTS observations (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            studentId INT NOT NULL,
+            content TEXT NOT NULL,
+            date DATE NOT NULL,
+            author VARCHAR(255),
+            FOREIGN KEY (studentId) REFERENCES students(id) ON DELETE CASCADE
+        );`,
+        `CREATE TABLE IF NOT EXISTS timetable_entries (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            day VARCHAR(255) NOT NULL,
+            time VARCHAR(255) NOT NULL,
+            subject VARCHAR(255) NOT NULL,
+            teacher VARCHAR(255),
+            classe VARCHAR(255) NOT NULL
+        );`,
+        `CREATE TABLE IF NOT EXISTS messages (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            senderId INT NOT NULL,
+            receiverId INT NOT NULL,
+            contenu TEXT,
+            date DATETIME NOT NULL,
+            attachmentName VARCHAR(255),
+            attachmentUrl TEXT,
+            FOREIGN KEY (senderId) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (receiverId) REFERENCES users(id) ON DELETE CASCADE
+        );`,
+        `CREATE TABLE IF NOT EXISTS events (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            title VARCHAR(255) NOT NULL,
+            description TEXT,
+            event_date DATE
+        );`,
+        `CREATE TABLE IF NOT EXISTS documents (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            title VARCHAR(255) NOT NULL,
+            description TEXT,
+            url TEXT NOT NULL,
+            mimeType VARCHAR(255)
+        );`,
+        `CREATE TABLE IF NOT EXISTS daily_menus (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            date DATE NOT NULL UNIQUE,
+            starter TEXT,
+            mainCourse TEXT,
+            dessert TEXT,
+            snack TEXT,
+            photoUrl TEXT
+        );`,
+        `CREATE TABLE IF NOT EXISTS notifications (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            userId INT NOT NULL,
+            message TEXT NOT NULL,
+            type VARCHAR(50),
+            link VARCHAR(255),
+            \`read\` BOOLEAN DEFAULT false,
+            timestamp DATETIME NOT NULL,
+            FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE
+        );`
+    ];
+
+    try {
+        for (const query of createTablesQueries) {
+            await connection.query(query);
+        }
+        console.log("✅ Schéma de la base de données vérifié et à jour.");
+    } catch (error) {
+        console.error("❌ Erreur critique lors de la création du schéma de la base de données :", error.message);
+        throw error;
+    }
+}
+
+async function initializeDatabase(retries = 3, delay = 5000) {
     if (!connectionString) {
         const message = "❌ FATAL: La variable d'environnement DATABASE_URL n'est pas définie.";
         console.error(message);
@@ -73,45 +198,78 @@ async function initializeDatabase() {
         return null;
     }
 
-    try {
-        console.log("Tentative de connexion à la base de données MySQL...");
-        const dbUrl = new URL(connectionString);
+    for (let i = 1; i <= retries; i++) {
+        try {
+            console.log(`Tentative de connexion à la base de données (essai ${i}/${retries})...`);
+            
+            // Check if connection string is for Render (contains ssl parameter) or local
+            const isRenderDb = connectionString.includes('ssl=');
 
-        const poolConfig = {
-            host: dbUrl.hostname,
-            user: dbUrl.username,
-            password: dbUrl.password,
-            database: dbUrl.pathname.slice(1), // remove leading '/'
-            port: dbUrl.port || 3306,
-            waitForConnections: true,
-            connectionLimit: 10,
-            queueLimit: 0,
-            connectTimeout: 20000, // Ajout d'un timeout de 20 secondes
-            // Ajout de la configuration SSL pour les hébergeurs comme Render/Hostinger qui le requièrent
-            ssl: {
-                rejectUnauthorized: false 
+            let poolConfig = {
+                uri: connectionString, // mysql2/promise supports URI connection strings directly
+                waitForConnections: true,
+                connectionLimit: 10,
+                queueLimit: 0,
+                connectTimeout: 30000,
+                acquireTimeout: 30000,
+            };
+
+            // Add SSL config only for Render-like databases
+            if (isRenderDb) {
+                 poolConfig.ssl = { rejectUnauthorized: false };
             }
-        };
-        
-        pool = mysql.createPool(poolConfig);
-        const connection = await pool.getConnection(); // test connection
-        console.log("✅ Connexion à la base de données MySQL réussie !");
-        connection.release();
-        return pool;
+            
+            pool = mysql.createPool(poolConfig);
+            const connection = await pool.getConnection();
+            console.log("✅ Connexion à la base de données MySQL réussie !");
 
-    } catch (error) {
-        console.error("❌ FATAL: Impossible de se connecter à la base de données MySQL.");
-        console.error("Veuillez vérifier votre variable d'environnement DATABASE_URL sur Render.");
-        console.error("Détails de l'erreur:", error.message);
-        dbInitializationError = error;
-        return null;
+            // S'assurer que le schéma de la base de données existe
+            await createDatabaseSchema(connection);
+
+            // Vérification et création de l'admin par défaut
+            try {
+                const [admins] = await connection.query("SELECT id FROM users WHERE role = 'admin'");
+                if (admins.length === 0) {
+                    console.warn("⚠️ Aucun compte administrateur trouvé. Création d'un compte admin par défaut...");
+                    const defaultAdminPassword = process.env.ADMIN_PASSWORD || 'admin';
+                    await connection.query(
+                        'INSERT INTO users (nom, email, role, password, telephone) VALUES (?, ?, ?, ?, ?)',
+                        ['Admin', 'admin@darennadjah.dz', 'admin', defaultAdminPassword, '0550000000']
+                    );
+                    console.log(`✅ Compte administrateur par défaut créé. Email: admin@darennadjah.dz, Mot de passe: ${defaultAdminPassword}`);
+                }
+            } catch (adminCheckError) {
+                console.error("❌ Erreur lors de la vérification/création du compte admin :", adminCheckError.message);
+                // On relance l'erreur pour que la tentative d'initialisation échoue et puisse être réessayée.
+                throw adminCheckError;
+            }
+            
+            connection.release();
+            dbInitializationError = null;
+            return pool;
+
+        } catch (error) {
+            console.error(`❌ Essai ${i} échoué: Impossible de se connecter à la base de données.`);
+            console.error("Détails de l'erreur:", error.message);
+            dbInitializationError = error;
+            
+            if (pool) {
+                await pool.end().catch(err => console.error("Erreur lors de la fermeture du pool échoué:", err));
+                pool = null;
+            }
+
+            if (i < retries) {
+                console.log(`Nouvelle tentative dans ${delay / 1000} secondes...`);
+                await new Promise(res => setTimeout(res, delay));
+            }
+        }
     }
+
+    console.error("❌ FATAL: Toutes les tentatives de connexion à la base de données ont échoué.");
+    return null;
 }
 
-const dbPoolPromise = initializeDatabase();
-
 async function getDbPool() {
-    const pool = await dbPoolPromise;
     if (!pool || dbInitializationError) {
         throw new Error("La base de données n'est pas connectée. Vérifiez les logs du serveur pour les détails.");
     }
@@ -591,10 +749,23 @@ app.use((err, req, res, next) => {
     res.status(500).send('Quelque chose s\'est mal passé !');
 });
 
-// Start server
-app.listen(port, () => {
-    console.log(`Le serveur backend pour Dar Ennadjah est en cours d'exécution sur le port ${port}`);
-    if (port === 3001) { // Affiche le message localhost uniquement en développement local
-        console.log(`Visitez http://localhost:${port}/api/status pour vérifier la connexion à la base de données.`);
-    }
-});
+// --- Démarrage du serveur ---
+console.log("🚀 Démarrage du serveur...");
+initializeDatabase()
+    .then(initializedPool => {
+        if (initializedPool) {
+            app.listen(port, () => {
+                console.log(`✅ Serveur prêt et à l'écoute sur le port ${port}`);
+                if (port === 3001) {
+                    console.log(`   Visitez http://localhost:${port}/api/status pour vérifier la connexion.`);
+                }
+            });
+        } else {
+            console.error("❌ FATAL: L'initialisation de la base de données a échoué. Le serveur ne démarrera pas.");
+            process.exit(1);
+        }
+    })
+    .catch(error => {
+        console.error("❌ FATAL: Une erreur critique a empêché le démarrage du serveur.", error);
+        process.exit(1);
+    });
