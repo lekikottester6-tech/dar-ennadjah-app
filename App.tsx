@@ -6,8 +6,22 @@ import { UserRole, Grade, Attendance, TimeTableEntry, DailyMenu, Observation, No
 import * as api from './api';
 import NotificationToast from './components/common/NotificationToast';
 
+// Clé pour stocker les informations de l'utilisateur dans le localStorage
+const USER_STORAGE_KEY = 'dar-ennadjah-user';
+
 const App: React.FC = () => {
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  // Essaye de récupérer l'utilisateur depuis le localStorage au chargement initial
+  const getInitialUser = (): User | null => {
+    try {
+      const savedUser = localStorage.getItem(USER_STORAGE_KEY);
+      return savedUser ? JSON.parse(savedUser) : null;
+    } catch (error) {
+      console.error("Failed to parse user from localStorage", error);
+      return null;
+    }
+  };
+
+  const [currentUser, setCurrentUser] = useState<User | null>(getInitialUser());
 
   const [grades, setGrades] = useState<Grade[]>([]);
   const [attendance, setAttendance] = useState<Attendance[]>([]);
@@ -24,7 +38,7 @@ const App: React.FC = () => {
 
   const addToast = useCallback((message: string, type: 'success' | 'error' | 'info' = 'info', duration: number = 7000) => {
     const newToast = {
-      id: Date.now(),
+      id: Date.now() + Math.random(), // Make ID unique to prevent key conflicts
       message,
       type,
     };
@@ -38,14 +52,14 @@ const App: React.FC = () => {
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const [gradesData, attendanceData, timetableData, menusData, observationsData, notificationsData] = await Promise.all([
-        api.getGrades(),
-        api.getAttendance(),
-        api.getTimetable(),
-        api.getMenus(),
-        api.getObservations(),
-        api.getNotifications(),
-      ]);
+      // Fetch data sequentially to be more resilient to server cold starts
+      const gradesData = await api.getGrades();
+      const attendanceData = await api.getAttendance();
+      const timetableData = await api.getTimetable();
+      const menusData = await api.getMenus();
+      const observationsData = await api.getObservations();
+      const notificationsData = await api.getNotifications();
+
       setGrades(gradesData);
       setAttendance(attendanceData);
       setTimetable(timetableData);
@@ -54,10 +68,11 @@ const App: React.FC = () => {
       setAllNotifications(notificationsData);
     } catch (error) {
       console.error("Failed to fetch data", error);
+      addToast("Erreur de chargement des données principales. Veuillez réessayer.", "error");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [addToast]);
 
   useEffect(() => {
     if (currentUser) {
@@ -66,10 +81,14 @@ const App: React.FC = () => {
   }, [currentUser, fetchData]);
 
   const handleLogin = useCallback((user: User) => {
+    // Sauvegarde l'utilisateur dans le localStorage
+    localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(user));
     setCurrentUser(user);
   }, []);
 
   const handleLogout = useCallback(() => {
+    // Supprime l'utilisateur du localStorage
+    localStorage.removeItem(USER_STORAGE_KEY);
     setCurrentUser(null);
   }, []);
 
@@ -210,9 +229,10 @@ const App: React.FC = () => {
                   notifications={allNotifications.filter(n => n.userId === currentUser.id)}
                   onMarkAsRead={handleMarkNotificationAsRead}
                   onMarkAllAsRead={() => handleMarkAllNotificationsAsRead(currentUser.id)}
-               />;
+                  addToast={addToast}
+                />;
       case UserRole.ADMIN:
-        return <AdminDashboard 
+        return <AdminDashboard
                   onLogout={handleLogout}
                   grades={grades}
                   attendance={attendance}
@@ -228,31 +248,29 @@ const App: React.FC = () => {
                   onAddObservation={handleAddObservation}
                   onUpdateObservation={handleUpdateObservation}
                   onDeleteObservation={handleDeleteObservation}
-                  notifications={allNotifications.filter(n => n.userId === currentUser.id)}
+                  notifications={allNotifications}
                   onMarkAsRead={handleMarkNotificationAsRead}
                   onMarkAllAsRead={() => handleMarkAllNotificationsAsRead(currentUser.id)}
                   addToast={addToast}
-               />;
+                />;
       default:
-        return <LoginScreen onLogin={handleLogin} />;
+        return <p>Rôle utilisateur non reconnu.</p>;
     }
   };
 
   return (
-    <div className="min-h-screen text-slate-900">
-      <div aria-live="assertive" className="fixed inset-x-0 top-0 flex items-start justify-center px-4 py-6 pointer-events-none sm:p-6 z-50">
-          <div className="w-full flex flex-col items-center space-y-4 sm:items-end">
-              {toasts.map((toast) => (
-                  <NotificationToast
-                      key={toast.id}
-                      notification={toast as Notification}
-                      onDismiss={() => removeToast(toast.id)}
-                  />
-              ))}
-          </div>
+    <>
+      <div className="fixed bottom-4 right-4 z-[100] space-y-2">
+        {toasts.map(toast => (
+          <NotificationToast
+            key={toast.id}
+            notification={toast}
+            onDismiss={() => removeToast(toast.id)}
+          />
+        ))}
       </div>
       {renderContent()}
-    </div>
+    </>
   );
 };
 

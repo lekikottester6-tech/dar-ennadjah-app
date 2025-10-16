@@ -6,7 +6,7 @@ import InformationCircleIcon from '../icons/InformationCircleIcon';
 import XIcon from '../icons/XIcon';
 
 interface NotificationToastProps {
-    notification: Notification;
+    notification: Omit<Notification, 'userId' | 'read' | 'timestamp' | 'link'>;
     onDismiss: () => void;
 }
 
