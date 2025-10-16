@@ -84,6 +84,7 @@ async function initializeDatabase() {
             waitForConnections: true,
             connectionLimit: 10,
             queueLimit: 0,
+            connectTimeout: 20000, // Ajout d'un timeout de 20 secondes
             // Ajout de la configuration SSL pour les hébergeurs comme Render/Hostinger qui le requièrent
             ssl: {
                 rejectUnauthorized: false 
@@ -189,6 +190,15 @@ app.post('/api/parent-login', asyncHandler(async (req, res) => {
 
 // USERS
 app.get('/api/users', getAll('users'));
+app.get('/api/users/:id', asyncHandler(async (req, res) => {
+    const db = await getDbPool();
+    const { id } = req.params;
+    const [users] = await db.query("SELECT id, nom, email, role, telephone FROM users WHERE id = ?", [id]);
+    if (users.length === 0) {
+        return res.status(404).json({ message: 'Utilisateur non trouvé.' });
+    }
+    res.json(users[0]);
+}));
 app.post('/api/users', asyncHandler(async (req, res) => {
     const db = await getDbPool();
     const { nom, email, role, telephone } = req.body;
@@ -245,8 +255,17 @@ app.post('/api/users/:id/send-password', asyncHandler(async (req, res) => {
 }));
 app.delete('/api/users/:id', deleteById('users'));
 
-// STUDENTS
-app.get('/api/students', getAll('students'));
+// STUDENTS - CORRIGÉ
+app.get('/api/students', asyncHandler(async (req, res) => {
+    const db = await getDbPool();
+    const [rows] = await db.query('SELECT * FROM `students`');
+    // S'assure que `isArchived` est un booléen pour éviter les problèmes de type
+    const students = rows.map(s => ({
+        ...s,
+        isArchived: Boolean(s.isArchived)
+    }));
+    res.json(students);
+}));
 app.post('/api/students', asyncHandler(async (req, res) => {
     const db = await getDbPool();
     const { nom, prenom, dateNaissance, classe, niveauScolaire, parentId, isArchived = false, photoUrl } = req.body;
@@ -343,7 +362,6 @@ app.put('/api/observations/:id', asyncHandler(async (req, res) => {
 app.delete('/api/observations/:id', deleteById('observations'));
 
 // TIMETABLE
-app.get('/api/timetable', getAll('timetable_entries'));
 app.post('/api/timetable', asyncHandler(async (req, res) => {
     const db = await getDbPool();
     const { classe } = req.query;
@@ -355,9 +373,19 @@ app.post('/api/timetable', asyncHandler(async (req, res) => {
         for (const entry of req.body) {
             await client.query('INSERT INTO timetable_entries (day, time, subject, teacher, classe) VALUES (?, ?, ?, ?, ?)', [entry.day, entry.time, entry.subject, entry.teacher, classe]);
         }
-        const [[studentsInClass]] = await client.query('SELECT parentId FROM students WHERE LOWER(classe) = LOWER(?)', [classe]);
-        for (const parentId of [...new Set(studentsInClass.map(s => s.parentId))]) {
-            if (parentId) await addNotification(client, { userId: parentId, message: `L'emploi du temps pour la classe ${classe} a été mis à jour.`, type: 'info', link: 'suivi' });
+        
+        const [studentsInClass] = await client.query('SELECT parentId FROM students WHERE LOWER(classe) = LOWER(?)', [classe]);
+        const parentIds = [...new Set(studentsInClass.map(s => s.parentId))];
+        
+        for (const parentId of parentIds) {
+            if (parentId) {
+                await addNotification(client, { 
+                    userId: parentId, 
+                    message: `L'emploi du temps pour la classe ${classe} a été mis à jour.`, 
+                    type: 'info', 
+                    link: 'suivi' 
+                });
+            }
         }
         await client.commit();
         const [updatedRows] = await client.query('SELECT * FROM timetable_entries WHERE LOWER(classe) = LOWER(?)', [classe]);
@@ -368,17 +396,62 @@ app.post('/api/timetable', asyncHandler(async (req, res) => {
         client.release();
     }
 }));
+app.get('/api/timetable', getAll('timetable_entries'));
 
-// MESSAGES
-app.get('/api/messages', getAll('messages'));
+// MESSAGES (REFACTORED AND FINAL - ROBUST VERSION 2)
 app.post('/api/messages', asyncHandler(async (req, res) => {
     const db = await getDbPool();
     const { senderId, receiverId, contenu, date, attachmentName, attachmentUrl } = req.body;
-    const [result] = await db.query('INSERT INTO messages (senderId, receiverId, contenu, date, attachmentName, attachmentUrl) VALUES (?, ?, ?, ?, ?, ?)', [senderId, receiverId, contenu, date, attachmentName, attachmentUrl]);
-    const [[sender]] = await db.query('SELECT nom FROM users WHERE id = ?', [senderId]);
-    if (sender) addNotification(db, { userId: receiverId, message: `Nouveau message de ${sender.nom}.`, type: 'info', link: 'messages' });
-    res.status(201).json({ id: result.insertId, ...req.body });
+
+    const numSenderId = Number(senderId);
+    if (!Number.isInteger(numSenderId) || numSenderId <= 0) {
+        return res.status(400).json({ message: `ID de l'expéditeur invalide. Reçu: '${senderId}'.` });
+    }
+    const numReceiverId = Number(receiverId);
+    if (!Number.isInteger(numReceiverId) || numReceiverId <= 0) {
+        return res.status(400).json({ message: `ID du destinataire invalide. Reçu: '${receiverId}'.` });
+    }
+    
+    // Vérification explicite AVANT la transaction pour une erreur plus claire
+    const [senders] = await db.query('SELECT id FROM users WHERE id = ?', [numSenderId]);
+    if (senders.length === 0) {
+        return res.status(400).json({ message: `Action impossible : l'expéditeur (ID ${numSenderId}) n'existe pas. Veuillez vous reconnecter.` });
+    }
+    const [receivers] = await db.query('SELECT id FROM users WHERE id = ?', [numReceiverId]);
+    if (receivers.length === 0) {
+        return res.status(400).json({ message: `Action impossible : le destinataire (ID ${numReceiverId}) n'existe pas.` });
+    }
+    
+    const connection = await db.getConnection();
+    try {
+        await connection.beginTransaction();
+        
+        const [result] = await connection.query(
+            'INSERT INTO messages (senderId, receiverId, contenu, date, attachmentName, attachmentUrl) VALUES (?, ?, ?, ?, ?, ?)',
+            [numSenderId, numReceiverId, contenu || null, date, attachmentName || null, attachmentUrl || null]
+        );
+
+        await addNotification(connection, {
+            userId: numReceiverId,
+            message: `Nouveau message de ${senders[0].nom || 'un utilisateur'}.`,
+            type: 'info',
+            link: 'messages'
+        });
+        
+        await connection.commit();
+
+        const [[newMessage]] = await connection.query('SELECT * FROM messages WHERE id = ?', [result.insertId]);
+        res.status(201).json(newMessage);
+
+    } catch (error) {
+        await connection.rollback();
+        console.error("[MESSAGES] ERREUR:", error);
+        res.status(500).json({ message: `Échec de l'envoi du message : ${error.message}` });
+    } finally {
+        connection.release();
+    }
 }));
+app.get('/api/messages', getAll('messages'));
 
 // EVENTS
 app.get('/api/events', getAll('events'));
