@@ -1,4 +1,5 @@
 {
+<<<<<<< HEAD
   "name": "dar-ennadjah-backend",
   "version": "1.0.0",
   "description": "Backend server for Dar Ennadjah school application",
@@ -11,5 +12,25 @@
     "express": "^4.19.2",
     "mysql2": "^3.10.3",
     "nodemailer": "^6.9.14"
+=======
+  "name": "dar-ennadjah-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-image-crop": "^11.0.10"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "vite": "^5.3.4"
+>>>>>>> a1a8b49fa9760731ab1e2c0cb5ce7dc2f72eae85
   }
 }

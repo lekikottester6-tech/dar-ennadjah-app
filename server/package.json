@@ -1,0 +1,15 @@
+{
+  "name": "dar-ennadjah-backend",
+  "version": "1.0.0",
+  "description": "Backend server for Dar Ennadjah school application",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "mysql2": "^3.10.3",
+    "nodemailer": "^6.9.14"
+  }
+}
