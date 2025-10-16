@@ -267,10 +267,7 @@ async function initializeDatabase(retries = 3, delay = 5000) {
     return null;
 }
 
-const dbPoolPromise = initializeDatabase();
-
 async function getDbPool() {
-    const pool = await dbPoolPromise;
     if (!pool || dbInitializationError) {
         throw new Error("La base de données n'est pas connectée. Vérifiez les logs du serveur pour les détails.");
     }
@@ -750,10 +747,23 @@ app.use((err, req, res, next) => {
     res.status(500).send('Quelque chose s\'est mal passé !');
 });
 
-// Start server
-app.listen(port, () => {
-    console.log(`Le serveur backend pour Dar Ennadjah est en cours d'exécution sur le port ${port}`);
-    if (port === 3001) { // Affiche le message localhost uniquement en développement local
-        console.log(`Visitez http://localhost:${port}/api/status pour vérifier la connexion à la base de données.`);
-    }
-});
+// --- Démarrage du serveur ---
+console.log("🚀 Démarrage du serveur...");
+initializeDatabase()
+    .then(initializedPool => {
+        if (initializedPool) {
+            app.listen(port, () => {
+                console.log(`✅ Serveur prêt et à l'écoute sur le port ${port}`);
+                if (port === 3001) {
+                    console.log(`   Visitez http://localhost:${port}/api/status pour vérifier la connexion.`);
+                }
+            });
+        } else {
+            console.error("❌ FATAL: L'initialisation de la base de données a échoué. Le serveur ne démarrera pas.");
+            process.exit(1);
+        }
+    })
+    .catch(error => {
+        console.error("❌ FATAL: Une erreur critique a empêché le démarrage du serveur.", error);
+        process.exit(1);
+    });
