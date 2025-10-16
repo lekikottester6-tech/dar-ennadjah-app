@@ -1,291 +1,229 @@
-require('dotenv').config(); // CHARGE LES VARIABLES D'ENVIRONNEMENT DEPUIS .env
-
-// INSTRUCTIONS:
-// 1. Placez ce fichier et `package.json` dans un nouveau dossier `server` à la racine de votre projet.
-// 2. Ouvrez un terminal dans le dossier `server`.
-// 3. Exécutez `npm install` pour installer les dépendances.
-// 4. Assurez-vous que votre variable d'environnement DATABASE_URL sur Render est correcte pour MySQL.
-// 5. Exécutez `node index.js` pour démarrer le serveur.
-// 6. Votre application frontend devrait maintenant pouvoir communiquer avec votre base de données via ce serveur.
 
 const express = require('express');
 const mysql = require('mysql2/promise');
 const cors = require('cors');
+require('dotenv').config();
 const nodemailer = require('nodemailer');
 
 const app = express();
-// --- CORRECTION CRUCIALE POUR RENDER ---
-// Utilise le port assigné par Render, ou 3001 pour le développement local.
-const port = process.env.PORT || 3001;
+const PORT = process.env.PORT || 3001;
 
-// --- MIDDLEWARE SETUP ---
-
-// 1. Activer CORS pour toutes les requêtes
-app.use(cors());
-
-// --- ORDRE STRICT DES MIDDLEWARES ---
-
-// 2. Utilisation des middlewares intégrés d'Express pour parser le JSON et les corps de requêtes URL-encoded.
-// NOTE: La limite est augmentée pour accepter les images en Base64.
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
-
-// 3. Middleware anti-cache pour les routes API pour garantir des données fraîches.
-app.use('/api', (req, res, next) => {
-    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-    res.setHeader('Pragma', 'no-cache');
-    res.setHeader('Expires', '0');
-    res.setHeader('Surrogate-Control', 'no-store');
-    next();
+// Configuration du transporteur Nodemailer (utilisez vos propres informations)
+const transporter = nodemailer.createTransport({
+  service: 'gmail', // ou autre service
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS,
+  },
 });
 
-// --- Configuration de la connexion à la base de données ---
-// Le serveur utilise maintenant une variable d'environnement sécurisée DATABASE_URL.
-// Assurez-vous de la définir dans votre service d'hébergement (ex: Render).
-// Format attendu: mysql://USER:PASSWORD@HOST:PORT/DATABASE
-const connectionString = process.env.DATABASE_URL;
+// Augmenter la limite de la taille du corps de la requête pour les photos en Base64
+app.use(express.json({ limit: '10mb' }));
+app.use(cors());
+
+// Configuration de la base de données
+let pool;
+
+const dbConfig = {
+  host: process.env.DB_HOST,
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  database: process.env.DB_NAME,
+  port: process.env.DB_PORT || 3306,
+  waitForConnections: true,
+  connectionLimit: 10,
+  queueLimit: 0
+};
+
+// Log de la configuration pour le débogage (sans le mot de passe)
+const { password, ...safeDbConfig } = dbConfig;
+console.log('Using DB Config:', safeDbConfig);
 
 
-// --- Configuration de Nodemailer pour l'envoi d'e-mails ---
-// Le serveur utilise maintenant des variables d'environnement sécurisées.
-// Assurez-vous de définir EMAIL_USER et EMAIL_PASS dans votre service d'hébergement (ex: Render).
-let transporter;
-if (process.env.EMAIL_USER && process.env.EMAIL_PASS) {
-    console.log("✅ Configuration d'e-mail détectée. L'envoi d'e-mails est activé.");
-    transporter = nodemailer.createTransport({
-        service: 'gmail',
-        auth: {
-            user: process.env.EMAIL_USER, // Variable d'environnement pour l'e-mail
-            pass: process.env.EMAIL_PASS  // Variable d'environnement pour le mot de passe d'application
-        }
-    });
-} else {
-    console.warn("⚠️ AVERTISSEMENT : Les variables d'environnement EMAIL_USER et EMAIL_PASS ne sont pas définies. L'envoi d'e-mails est DÉSACTIVÉ.");
+async function connectToDatabase() {
+    try {
+        pool = mysql.createPool(dbConfig);
+        const connection = await pool.getConnection();
+        console.log('✅ Connexion à la base de données réussie.');
+        connection.release();
+    } catch (error) {
+        console.error('❌ Erreur de connexion à la base de données:', error.message);
+        console.log('Nouvelle tentative de connexion dans 5 secondes...');
+        setTimeout(connectToDatabase, 5000);
+    }
 }
 
+// Fonction pour initialiser la base de données
+async function initializeDatabase() {
+  try {
+    const connection = await pool.getConnection();
+    console.log('Initialisation de la base de données...');
 
-let pool;
-let dbInitializationError = null;
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        nom VARCHAR(255) NOT NULL,
+        email VARCHAR(255) NOT NULL UNIQUE,
+        password VARCHAR(255) NOT NULL,
+        role ENUM('admin', 'parent') NOT NULL,
+        telephone VARCHAR(255)
+      );
+    `);
 
-async function createDatabaseSchema(connection) {
-    console.log("Vérification et création du schéma de la base de données si nécessaire...");
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS students (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        nom VARCHAR(255) NOT NULL,
+        prenom VARCHAR(255) NOT NULL,
+        dateNaissance DATE NOT NULL,
+        classe VARCHAR(255) NOT NULL,
+        niveauScolaire VARCHAR(255),
+        parentId INT NOT NULL,
+        isArchived BOOLEAN DEFAULT FALSE,
+        photoUrl LONGTEXT,
+        FOREIGN KEY (parentId) REFERENCES users(id) ON DELETE CASCADE
+      );
+    `);
 
-    const createTablesQueries = [
-        `CREATE TABLE IF NOT EXISTS users (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            nom VARCHAR(255) NOT NULL,
-            email VARCHAR(255) NOT NULL UNIQUE,
-            role ENUM('admin', 'parent') NOT NULL,
-            password VARCHAR(255) NOT NULL,
-            telephone VARCHAR(255)
-        );`,
-        `CREATE TABLE IF NOT EXISTS students (
+    await connection.query(`
+        CREATE TABLE IF NOT EXISTS teachers (
             id INT AUTO_INCREMENT PRIMARY KEY,
             nom VARCHAR(255) NOT NULL,
             prenom VARCHAR(255) NOT NULL,
-            dateNaissance DATE,
-            classe VARCHAR(255),
-            niveauScolaire VARCHAR(255),
-            parentId INT,
-            isArchived BOOLEAN DEFAULT false,
-            photoUrl TEXT,
-            FOREIGN KEY (parentId) REFERENCES users(id) ON DELETE SET NULL
-        );`,
-        `CREATE TABLE IF NOT EXISTS teachers (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            nom VARCHAR(255) NOT NULL,
-            prenom VARCHAR(255) NOT NULL,
-            matiere VARCHAR(255),
-            telephone VARCHAR(255),
-            photoUrl TEXT,
-            classes JSON
-        );`,
-        `CREATE TABLE IF NOT EXISTS grades (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            studentId INT NOT NULL,
             matiere VARCHAR(255) NOT NULL,
-            note FLOAT NOT NULL,
-            coefficient FLOAT NOT NULL,
-            periode VARCHAR(255),
-            date DATE,
-            FOREIGN KEY (studentId) REFERENCES students(id) ON DELETE CASCADE
-        );`,
-        `CREATE TABLE IF NOT EXISTS attendance (
+            telephone VARCHAR(255) NOT NULL,
+            photoUrl LONGTEXT,
+            classes JSON
+        );
+    `);
+    
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS grades (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        studentId INT NOT NULL,
+        matiere VARCHAR(255) NOT NULL,
+        note FLOAT NOT NULL,
+        coefficient FLOAT NOT NULL,
+        periode VARCHAR(255) NOT NULL,
+        date DATE NOT NULL,
+        FOREIGN KEY (studentId) REFERENCES students(id) ON DELETE CASCADE
+      );
+    `);
+
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS attendance (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        studentId INT NOT NULL,
+        date DATE NOT NULL,
+        statut ENUM('Présent', 'Absent (Non justifié)', 'Absent (Justifié)', 'En retard') NOT NULL,
+        justification TEXT,
+        FOREIGN KEY (studentId) REFERENCES students(id) ON DELETE CASCADE
+      );
+    `);
+
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS observations (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        studentId INT NOT NULL,
+        date DATE NOT NULL,
+        content TEXT NOT NULL,
+        author VARCHAR(255) NOT NULL,
+        FOREIGN KEY (studentId) REFERENCES students(id) ON DELETE CASCADE
+      );
+    `);
+    
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS messages (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        senderId INT NOT NULL,
+        receiverId INT NOT NULL,
+        contenu TEXT NOT NULL,
+        date DATETIME NOT NULL,
+        attachmentName VARCHAR(255),
+        attachmentUrl LONGTEXT,
+        FOREIGN KEY (senderId) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY (receiverId) REFERENCES users(id) ON DELETE CASCADE
+      );
+    `);
+    
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS notifications (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          userId INT,
+          message TEXT NOT NULL,
+          type ENUM('success', 'error', 'info') NOT NULL,
+          \`read\` BOOLEAN DEFAULT FALSE,
+          timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+          link VARCHAR(255)
+      );
+    `);
+
+     await connection.query(`
+        CREATE TABLE IF NOT EXISTS events (
             id INT AUTO_INCREMENT PRIMARY KEY,
-            studentId INT NOT NULL,
-            date DATE NOT NULL,
-            statut VARCHAR(255) NOT NULL,
-            justification TEXT,
-            FOREIGN KEY (studentId) REFERENCES students(id) ON DELETE CASCADE
-        );`,
-        `CREATE TABLE IF NOT EXISTS observations (
+            title VARCHAR(255) NOT NULL,
+            description TEXT,
+            event_date DATE NOT NULL
+        );
+    `);
+
+    await connection.query(`
+        CREATE TABLE IF NOT EXISTS documents (
             id INT AUTO_INCREMENT PRIMARY KEY,
-            studentId INT NOT NULL,
-            content TEXT NOT NULL,
-            date DATE NOT NULL,
-            author VARCHAR(255),
-            FOREIGN KEY (studentId) REFERENCES students(id) ON DELETE CASCADE
-        );`,
-        `CREATE TABLE IF NOT EXISTS timetable_entries (
+            title VARCHAR(255) NOT NULL,
+            description TEXT,
+            url LONGTEXT NOT NULL,
+            mimeType VARCHAR(255)
+        );
+    `);
+    
+    await connection.query(`
+        CREATE TABLE IF NOT EXISTS daily_menus (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            date DATE NOT NULL UNIQUE,
+            starter VARCHAR(255),
+            mainCourse VARCHAR(255),
+            dessert VARCHAR(255),
+            snack VARCHAR(255),
+            photoUrl LONGTEXT
+        );
+    `);
+    
+    await connection.query(`
+        CREATE TABLE IF NOT EXISTS timetable_entries (
             id INT AUTO_INCREMENT PRIMARY KEY,
             day VARCHAR(255) NOT NULL,
             time VARCHAR(255) NOT NULL,
             subject VARCHAR(255) NOT NULL,
-            teacher VARCHAR(255),
+            teacher VARCHAR(255) NOT NULL,
             classe VARCHAR(255) NOT NULL
-        );`,
-        `CREATE TABLE IF NOT EXISTS messages (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            senderId INT NOT NULL,
-            receiverId INT NOT NULL,
-            contenu TEXT,
-            date DATETIME NOT NULL,
-            attachmentName VARCHAR(255),
-            attachmentUrl TEXT,
-            FOREIGN KEY (senderId) REFERENCES users(id) ON DELETE CASCADE,
-            FOREIGN KEY (receiverId) REFERENCES users(id) ON DELETE CASCADE
-        );`,
-        `CREATE TABLE IF NOT EXISTS events (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            title VARCHAR(255) NOT NULL,
-            description TEXT,
-            event_date DATE
-        );`,
-        `CREATE TABLE IF NOT EXISTS documents (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            title VARCHAR(255) NOT NULL,
-            description TEXT,
-            url TEXT NOT NULL,
-            mimeType VARCHAR(255)
-        );`,
-        `CREATE TABLE IF NOT EXISTS daily_menus (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            date DATE NOT NULL UNIQUE,
-            starter TEXT,
-            mainCourse TEXT,
-            dessert TEXT,
-            snack TEXT,
-            photoUrl TEXT
-        );`,
-        `CREATE TABLE IF NOT EXISTS notifications (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            userId INT NOT NULL,
-            message TEXT NOT NULL,
-            type VARCHAR(50),
-            link VARCHAR(255),
-            \`read\` BOOLEAN DEFAULT false,
-            timestamp DATETIME NOT NULL,
-            FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE
-        );`
-    ];
+        );
+    `);
 
-    try {
-        for (const query of createTablesQueries) {
-            await connection.query(query);
-        }
-        console.log("✅ Schéma de la base de données vérifié et à jour.");
-    } catch (error) {
-        console.error("❌ Erreur critique lors de la création du schéma de la base de données :", error.message);
-        throw error;
+    // Vérifier si un admin existe, sinon le créer
+    const [rows] = await connection.query("SELECT * FROM users WHERE role = 'admin'");
+    if (rows.length === 0) {
+      console.log("Aucun admin trouvé. Création de l'admin par défaut...");
+      await connection.query(
+        "INSERT INTO users (nom, email, password, role, telephone) VALUES (?, ?, ?, ?, ?)",
+        ['Admin', 'admin@darennadjah.dz', 'admin', 'admin', '0550123456']
+      );
     }
+
+    connection.release();
+    console.log('✅ Base de données initialisée.');
+  } catch (error) {
+    console.error('❌ Erreur lors de l\'initialisation de la base de données:', error);
+  }
 }
 
-async function initializeDatabase(retries = 3, delay = 5000) {
-    if (!connectionString) {
-        const message = "❌ FATAL: La variable d'environnement DATABASE_URL n'est pas définie.";
-        console.error(message);
-        dbInitializationError = new Error(message);
-        return null;
-    }
+// Middleware pour gérer les erreurs des fonctions asynchrones
+const asyncHandler = fn => (req, res, next) =>
+  Promise.resolve(fn(req, res, next)).catch(next);
 
-    for (let i = 1; i <= retries; i++) {
-        try {
-            console.log(`Tentative de connexion à la base de données (essai ${i}/${retries})...`);
-            
-            // Check if connection string is for Render (contains ssl parameter) or local
-            const isRenderDb = connectionString.includes('ssl=');
-
-            let poolConfig = {
-                uri: connectionString, // mysql2/promise supports URI connection strings directly
-                waitForConnections: true,
-                connectionLimit: 10,
-                queueLimit: 0,
-                connectTimeout: 30000,
-                acquireTimeout: 30000,
-            };
-
-            // Add SSL config only for Render-like databases
-            if (isRenderDb) {
-                 poolConfig.ssl = { rejectUnauthorized: false };
-            }
-            
-            pool = mysql.createPool(poolConfig);
-            const connection = await pool.getConnection();
-            console.log("✅ Connexion à la base de données MySQL réussie !");
-
-            // S'assurer que le schéma de la base de données existe
-            await createDatabaseSchema(connection);
-
-            // Vérification et création de l'admin par défaut
-            try {
-                const [admins] = await connection.query("SELECT id FROM users WHERE role = 'admin'");
-                if (admins.length === 0) {
-                    console.warn("⚠️ Aucun compte administrateur trouvé. Création d'un compte admin par défaut...");
-                    const defaultAdminPassword = process.env.ADMIN_PASSWORD || 'admin';
-                    await connection.query(
-                        'INSERT INTO users (nom, email, role, password, telephone) VALUES (?, ?, ?, ?, ?)',
-                        ['Admin', 'admin@darennadjah.dz', 'admin', defaultAdminPassword, '0550000000']
-                    );
-                    console.log(`✅ Compte administrateur par défaut créé. Email: admin@darennadjah.dz, Mot de passe: ${defaultAdminPassword}`);
-                }
-            } catch (adminCheckError) {
-                console.error("❌ Erreur lors de la vérification/création du compte admin :", adminCheckError.message);
-                // On relance l'erreur pour que la tentative d'initialisation échoue et puisse être réessayée.
-                throw adminCheckError;
-            }
-            
-            connection.release();
-            dbInitializationError = null;
-            return pool;
-
-        } catch (error) {
-            console.error(`❌ Essai ${i} échoué: Impossible de se connecter à la base de données.`);
-            console.error("Détails de l'erreur:", error.message);
-            dbInitializationError = error;
-            
-            if (pool) {
-                await pool.end().catch(err => console.error("Erreur lors de la fermeture du pool échoué:", err));
-                pool = null;
-            }
-
-            if (i < retries) {
-                console.log(`Nouvelle tentative dans ${delay / 1000} secondes...`);
-                await new Promise(res => setTimeout(res, delay));
-            }
-        }
-    }
-
-    console.error("❌ FATAL: Toutes les tentatives de connexion à la base de données ont échoué.");
-    return null;
-}
-
-async function getDbPool() {
-    if (!pool || dbInitializationError) {
-        throw new Error("La base de données n'est pas connectée. Vérifiez les logs du serveur pour les détails.");
-    }
-    return pool;
-}
-
-const asyncHandler = (fn) => (req, res, next) =>
-    Promise.resolve(fn(req, res, next)).catch((err) => {
-        console.error("--- ERREUR API NON GÉRÉE ---");
-        console.error(err);
-        const errorMessage = (err && err.message) ? err.message : 'Une erreur interne du serveur est survenue.';
-        res.status(500).json({ message: errorMessage, error: err });
-    });
-
+// --- Fonctions utilitaires ---
 const generateRandomPassword = (length = 8) => {
-    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
     let password = '';
     for (let i = 0; i < length; i++) {
         password += chars.charAt(Math.floor(Math.random() * chars.length));
@@ -293,306 +231,278 @@ const generateRandomPassword = (length = 8) => {
     return password;
 };
 
-// --- Point de terminaison de statut (pour le diagnostic) ---
-app.get('/api/status', async (req, res) => {
-    if (dbInitializationError) {
-        return res.status(500).json({
-            status: 'error',
-            message: 'Impossible de se connecter à la base de données.',
-            error: dbInitializationError.message,
-        });
-    }
+// Fonction pour envoyer une notification
+const addNotification = async (userId, message, type, link) => {
     try {
-        const db = await getDbPool();
-        await db.query('SELECT 1');
-        res.json({
-            status: 'ok',
-            message: 'Le serveur est en cours d\'exécution et connecté avec succès à la base de données.'
-        });
+        await pool.execute(
+            'INSERT INTO notifications (userId, message, type, link, `read`, timestamp) VALUES (?, ?, ?, ?, ?, ?)',
+            [userId, message, type, link, false, new Date()]
+        );
     } catch (error) {
-        res.status(500).json({
-            status: 'error',
-            message: 'Le serveur est en cours d\'exécution, mais n\'a pas pu exécuter de requête.',
-            error: error.message,
-        });
+        console.error("Erreur lors de l'ajout de la notification:", error);
     }
-});
+};
 
-// --- API Endpoints ---
+// --- ROUTES API ---
 
-const getAll = (tableName) => asyncHandler(async (req, res) => {
-    const db = await getDbPool();
-    const [rows] = await db.query(`SELECT * FROM \`${tableName}\``);
-    res.json(rows);
-});
-
-const deleteById = (tableName) => asyncHandler(async (req, res) => {
-    const db = await getDbPool();
-    const { id } = req.params;
-    await db.query(`DELETE FROM \`${tableName}\` WHERE id = ?`, [id]);
-    res.status(204).send();
-});
-
-// AUTHENTICATION
+// Auth
 app.post('/api/parent-login', asyncHandler(async (req, res) => {
-    const db = await getDbPool();
     const { email, password } = req.body;
-    if (!email || !password) {
-        return res.status(400).json({ message: 'Email et mot de passe sont requis.' });
-    }
-    const [users] = await db.query("SELECT * FROM users WHERE email = ? AND role = 'parent'", [email]);
-    if (users.length === 0 || users[0].password !== password) {
+    const [rows] = await pool.execute('SELECT * FROM users WHERE email = ? AND role = ?', [email, 'parent']);
+    if (rows.length === 0 || rows[0].password !== password) {
         return res.status(401).json({ message: 'Email ou mot de passe incorrect.' });
     }
-    const { password: userPassword, ...userWithoutPassword } = users[0];
-    res.json(userWithoutPassword);
+    const { password: _, ...user } = rows[0];
+    res.json(user);
 }));
 
 app.post('/api/admin-login', asyncHandler(async (req, res) => {
-    const db = await getDbPool();
     const { password } = req.body;
-    if (!password) {
-        return res.status(400).json({ message: 'Le mot de passe est requis.' });
-    }
-    const [users] = await db.query("SELECT * FROM users WHERE role = 'admin'");
-    if (users.length === 0) {
-        return res.status(404).json({ message: 'Aucun compte administrateur trouvé.' });
-    }
-    const adminUser = users[0];
-    if (adminUser.password !== password) {
+    const [rows] = await pool.execute("SELECT * FROM users WHERE role = 'admin'");
+    if (rows.length === 0 || rows[0].password !== password) {
         return res.status(401).json({ message: 'Mot de passe incorrect.' });
     }
-    const { password: userPassword, ...userWithoutPassword } = adminUser;
-    res.json(userWithoutPassword);
+    const { password: _, ...user } = rows[0];
+    res.json(user);
 }));
 
-// USERS
-app.get('/api/users', getAll('users'));
+
+// Users
+app.get('/api/users', asyncHandler(async (req, res) => {
+    const [rows] = await pool.execute('SELECT id, nom, email, role, telephone FROM users');
+    res.json(rows);
+}));
 app.get('/api/users/:id', asyncHandler(async (req, res) => {
-    const db = await getDbPool();
-    const { id } = req.params;
-    const [users] = await db.query("SELECT id, nom, email, role, telephone FROM users WHERE id = ?", [id]);
-    if (users.length === 0) {
-        return res.status(404).json({ message: 'Utilisateur non trouvé.' });
-    }
-    res.json(users[0]);
+    const [rows] = await pool.execute('SELECT id, nom, email, role, telephone FROM users WHERE id = ?', [req.params.id]);
+    if (rows.length === 0) return res.status(404).json({ message: 'Utilisateur non trouvé.' });
+    res.json(rows[0]);
 }));
 app.get('/api/admin-user', asyncHandler(async (req, res) => {
-    const db = await getDbPool();
-    let [users] = await db.query("SELECT id, nom, email, role FROM users WHERE role = 'admin' LIMIT 1");
-
-    if (users.length === 0) {
-        // L'admin n'existe pas, nous essayons de le créer.
-        // `INSERT IGNORE` empêche les erreurs si un autre processus le crée en même temps.
-        console.warn("⚠️ Aucun compte administrateur trouvé. Tentative de création...");
-        const defaultAdminPassword = process.env.ADMIN_PASSWORD || 'admin';
-        await db.query(
-            'INSERT IGNORE INTO users (nom, email, role, password, telephone) VALUES (?, ?, ?, ?, ?)',
-            ['Admin', 'admin@darennadjah.dz', 'admin', defaultAdminPassword, '0550000000']
+    let [rows] = await pool.execute("SELECT id, nom, email, role, telephone FROM users WHERE role = 'admin' LIMIT 1");
+    if (rows.length === 0) {
+        console.log("Aucun admin trouvé, création de l'admin par défaut...");
+        const defaultPassword = 'admin';
+        const [insertResult] = await pool.execute(
+            "INSERT INTO users (nom, email, password, role, telephone) VALUES (?, ?, ?, ?, ?)",
+            ['Admin', 'admin@darennadjah.dz', defaultPassword, 'admin', '0550123456']
         );
-        
-        // Nous réinterrogeons la base de données ; il devrait exister maintenant.
-        [users] = await db.query("SELECT id, nom, email, role FROM users WHERE role = 'admin' LIMIT 1");
-
-        if (users.length === 0) {
-            // Si il n'existe toujours pas, quelque chose de grave s'est produit.
-            console.error("❌ FATAL: Impossible de créer ou de trouver le compte admin même après une tentative d'insertion.");
-            return res.status(500).json({ message: "Le compte administrateur est manquant et n'a pas pu être créé." });
-        }
-        console.log("✅ Compte administrateur par défaut créé/trouvé avec succès.");
+        [rows] = await pool.execute("SELECT id, nom, email, role, telephone FROM users WHERE id = ?", [insertResult.insertId]);
     }
-    
-    res.json(users[0]);
+    res.json(rows[0]);
 }));
 app.post('/api/users', asyncHandler(async (req, res) => {
-    const db = await getDbPool();
-    const { nom, email, role, telephone } = req.body;
+    const { nom, email, telephone } = req.body;
     const generatedPassword = generateRandomPassword();
-    const [result] = await db.query('INSERT INTO users (nom, email, role, telephone, password) VALUES (?, ?, ?, ?, ?)', [nom, email, role, telephone, generatedPassword]);
-    res.status(201).json({ id: result.insertId, ...req.body, generatedPassword });
+    try {
+        const [result] = await pool.execute('INSERT INTO users (nom, email, password, role, telephone) VALUES (?, ?, ?, ?, ?)', [nom, email, generatedPassword, 'parent', telephone]);
+        res.status(201).json({ id: result.insertId, nom, email, role: 'parent', telephone, generatedPassword });
+    } catch (error) {
+        if (error.code === 'ER_DUP_ENTRY') {
+            return res.status(409).json({ message: "Cette adresse email est déjà utilisée." });
+        }
+        throw error;
+    }
 }));
 app.put('/api/users/:id', asyncHandler(async (req, res) => {
-    const db = await getDbPool();
-    const { id } = req.params;
-    const { nom, email, role, telephone } = req.body;
-    await db.query('UPDATE users SET nom = ?, email = ?, role = ?, telephone = ? WHERE id = ?', [nom, email, role, telephone, id]);
-    res.json({ id, ...req.body });
+    const { nom, email, telephone } = req.body;
+    await pool.execute('UPDATE users SET nom = ?, email = ?, telephone = ? WHERE id = ?', [nom, email, telephone, req.params.id]);
+    res.json({ id: parseInt(req.params.id, 10), nom, email, telephone, role: 'parent' });
+}));
+app.delete('/api/users/:id', asyncHandler(async (req, res) => {
+    await pool.execute('DELETE FROM users WHERE id = ?', [req.params.id]);
+    res.status(204).send();
 }));
 app.post('/api/users/:id/reset-password', asyncHandler(async (req, res) => {
-    const db = await getDbPool();
-    const { id } = req.params;
     const newPassword = generateRandomPassword();
-    await db.query('UPDATE users SET password = ? WHERE id = ?', [newPassword, id]);
+    await pool.execute('UPDATE users SET password = ? WHERE id = ?', [newPassword, req.params.id]);
     res.json({ newPassword });
 }));
 app.post('/api/users/:id/send-password', asyncHandler(async (req, res) => {
-    if (!transporter) {
-        return res.status(503).json({ message: "Le service d'envoi d'e-mails n'est pas configuré sur le serveur." });
-    }
-    const db = await getDbPool();
-    const { id } = req.params;
     const { password } = req.body;
-    if (!password) return res.status(400).json({ message: 'Le mot de passe est requis.' });
-    const [users] = await db.query('SELECT email, nom FROM users WHERE id = ?', [id]);
-    if (users.length === 0) return res.status(404).json({ message: 'Parent non trouvé.' });
-    const parent = users[0];
-    const mailOptions = { 
-        from: `"Dar Ennadjah" <${process.env.EMAIL_USER}>`, 
-        to: parent.email, 
-        subject: 'Vos identifiants de connexion pour Dar Ennadjah', 
-        html: `
-            <p>Bonjour ${parent.nom},</p>
-            <p>Voici vos informations de connexion pour l'application Dar Ennadjah :</p>
-            <ul>
-                <li><strong>Email :</strong> ${parent.email}</li>
-                <li><strong>Mot de passe :</strong> ${password}</li>
-            </ul>
-            <p>Cordialement,<br>L'équipe de Dar Ennadjah</p>
-        ` 
+    const [rows] = await pool.execute('SELECT nom, email FROM users WHERE id = ?', [req.params.id]);
+    if (rows.length === 0) return res.status(404).json({ message: 'Utilisateur non trouvé.' });
+
+    const user = rows[0];
+
+    const mailOptions = {
+        from: process.env.EMAIL_USER,
+        to: user.email,
+        subject: 'Vos identifiants pour Dar Ennadjah',
+        html: `<p>Bonjour ${user.nom},</p>
+               <p>Voici vos informations de connexion pour l'application Dar Ennadjah :</p>
+               <ul>
+                 <li><strong>Email :</strong> ${user.email}</li>
+                 <li><strong>Mot de passe :</strong> ${password}</li>
+               </ul>
+               <p>Cordialement,<br>L'équipe de Dar Ennadjah</p>`
     };
     try {
         await transporter.sendMail(mailOptions);
-        res.json({ success: true, message: `Email envoyé avec succès à ${parent.email}` });
+        res.json({ success: true });
     } catch (error) {
-        console.error("Erreur lors de l'envoi de l'email:", error);
-        res.status(500).json({ message: "Échec de l'envoi de l'email. Vérifiez la configuration du serveur.", error: error.message });
+        console.error("Erreur d'envoi d'email:", error);
+        res.status(500).json({ message: "Erreur lors de l'envoi de l'email." });
     }
 }));
-app.delete('/api/users/:id', deleteById('users'));
 
-// STUDENTS - CORRIGÉ
+
+// Students
 app.get('/api/students', asyncHandler(async (req, res) => {
-    const db = await getDbPool();
-    const [rows] = await db.query('SELECT * FROM `students`');
-    // S'assure que `isArchived` est un booléen pour éviter les problèmes de type
-    const students = rows.map(s => ({
-        ...s,
-        isArchived: Boolean(s.isArchived)
-    }));
-    res.json(students);
+    const [rows] = await pool.execute('SELECT * FROM students');
+    res.json(rows);
 }));
 app.post('/api/students', asyncHandler(async (req, res) => {
-    const db = await getDbPool();
-    const { nom, prenom, dateNaissance, classe, niveauScolaire, parentId, isArchived = false, photoUrl } = req.body;
-    const [result] = await db.query('INSERT INTO students (nom, prenom, dateNaissance, classe, niveauScolaire, parentId, isArchived, photoUrl) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [nom, prenom, dateNaissance, classe, niveauScolaire || null, parentId, isArchived, photoUrl]);
+    const { nom, prenom, dateNaissance, classe, niveauScolaire, parentId, photoUrl } = req.body;
+    const [result] = await pool.execute(
+        'INSERT INTO students (nom, prenom, dateNaissance, classe, niveauScolaire, parentId, photoUrl) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [nom, prenom, dateNaissance, classe, niveauScolaire, parentId, photoUrl]
+    );
     res.status(201).json({ id: result.insertId, ...req.body });
 }));
+
+// ======================================================================
+// CORRECTION DÉFINITIVE POUR LA SAUVEGARDE DES PHOTOS
+// ======================================================================
 app.put('/api/students/:id', asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const db = await getDbPool();
     const { nom, prenom, dateNaissance, classe, niveauScolaire, parentId, isArchived, photoUrl } = req.body;
-    await db.query('UPDATE students SET nom = ?, prenom = ?, dateNaissance = ?, classe = ?, niveauScolaire = ?, parentId = ?, isArchived = ?, photoUrl = ? WHERE id = ?', [nom, prenom, dateNaissance, classe, niveauScolaire || null, parentId, isArchived, photoUrl, id]);
-    res.json({ id, ...req.body });
+    await pool.execute(
+        'UPDATE students SET nom = ?, prenom = ?, dateNaissance = ?, classe = ?, niveauScolaire = ?, parentId = ?, isArchived = ?, photoUrl = ? WHERE id = ?',
+        [nom, prenom, dateNaissance, classe, niveauScolaire, parentId, isArchived, photoUrl, id]
+    );
+    res.json({ id: parseInt(id), ...req.body });
 }));
 
-
-// TEACHERS
+// Teachers
 app.get('/api/teachers', asyncHandler(async (req, res) => {
-    const db = await getDbPool();
-    const [rows] = await db.query('SELECT * FROM teachers');
-
-    const teachers = rows.map(t => {
-        let parsedClasses = [];
-        // Only attempt to parse if t.classes is a non-empty string
-        if (t.classes && typeof t.classes === 'string') {
-            try {
-                const parsed = JSON.parse(t.classes);
-                // Ensure the parsed result is actually an array
-                if (Array.isArray(parsed)) {
-                    parsedClasses = parsed;
-                }
-            } catch (e) {
-                // If parsing fails, log a warning but don't crash. Default to empty array.
-                console.warn(`[WARN] Could not parse 'classes' JSON for teacher ID ${t.id}. Value was: "${t.classes}". Defaulting to empty array.`);
-            }
+    const [rows] = await pool.execute('SELECT * FROM teachers');
+    const teachers = rows.map(teacher => {
+        try {
+            // S'assurer que 'classes' est toujours un tableau
+            const classesArray = typeof teacher.classes === 'string' ? JSON.parse(teacher.classes) : (teacher.classes || []);
+            return { ...teacher, classes: classesArray };
+        } catch (e) {
+            console.warn(`Erreur de parsing JSON pour l'enseignant ${teacher.id}. Utilisation d'un tableau vide.`);
+            return { ...teacher, classes: [] };
         }
-        return { ...t, classes: parsedClasses };
     });
-
     res.json(teachers);
 }));
+
 app.post('/api/teachers', asyncHandler(async (req, res) => {
-    const db = await getDbPool();
     const { nom, prenom, matiere, telephone, photoUrl, classes } = req.body;
-    const [result] = await db.query('INSERT INTO teachers (nom, prenom, matiere, telephone, photoUrl, classes) VALUES (?, ?, ?, ?, ?, ?)', [nom, prenom, matiere, telephone, photoUrl, JSON.stringify(classes || [])]);
-    res.status(201).json({ id: result.insertId, ...req.body, classes: classes || [] });
+    const [result] = await pool.execute(
+        'INSERT INTO teachers (nom, prenom, matiere, telephone, photoUrl, classes) VALUES (?, ?, ?, ?, ?, ?)',
+        [nom, prenom, matiere, telephone, photoUrl, JSON.stringify(classes || [])]
+    );
+    res.status(201).json({ id: result.insertId, ...req.body });
 }));
 app.put('/api/teachers/:id', asyncHandler(async (req, res) => {
-    const db = await getDbPool();
-    const { id } = req.params;
     const { nom, prenom, matiere, telephone, photoUrl, classes } = req.body;
-    await db.query('UPDATE teachers SET nom = ?, prenom = ?, matiere = ?, telephone = ?, photoUrl = ?, classes = ? WHERE id = ?', [nom, prenom, matiere, telephone, photoUrl, JSON.stringify(classes || []), id]);
-    res.json({ id, ...req.body, classes: classes || [] });
+    await pool.execute(
+        'UPDATE teachers SET nom = ?, prenom = ?, matiere = ?, telephone = ?, photoUrl = ?, classes = ? WHERE id = ?',
+        [nom, prenom, matiere, telephone, photoUrl, JSON.stringify(classes || []), req.params.id]
+    );
+    res.json({ id: parseInt(req.params.id), ...req.body });
 }));
-app.delete('/api/teachers/:id', deleteById('teachers'));
+app.delete('/api/teachers/:id', asyncHandler(async (req, res) => {
+    await pool.execute('DELETE FROM teachers WHERE id = ?', [req.params.id]);
+    res.status(204).send();
+}));
 
-// NOTIFICATION HELPER
-const addNotification = async (queryable, { userId, message, type, link }) => {
-    await queryable.query('INSERT INTO notifications (userId, message, type, link, `read`, timestamp) VALUES (?, ?, ?, ?, false, NOW())', [userId, message, type, link]);
-};
 
-// GRADES, ATTENDANCE, OBSERVATIONS...
-app.get('/api/grades', getAll('grades'));
+// Grades
+app.get('/api/grades', asyncHandler(async (req, res) => { const [rows] = await pool.execute('SELECT * FROM grades'); res.json(rows); }));
 app.post('/api/grades', asyncHandler(async (req, res) => {
-    const db = await getDbPool();
     const { studentId, matiere, note, coefficient, periode, date } = req.body;
-    const [result] = await db.query('INSERT INTO grades (studentId, matiere, note, coefficient, periode, date) VALUES (?, ?, ?, ?, ?, ?)', [studentId, matiere, note, coefficient, periode, date]);
-    const [[student]] = await db.query('SELECT parentId, prenom FROM students WHERE id = ?', [studentId]);
-    if (student) addNotification(db, { userId: student.parentId, message: `Nouvelle note en ${matiere} pour ${student.prenom}: ${note}/20.`, type: 'info', link: 'suivi' });
+    const [result] = await pool.execute('INSERT INTO grades (studentId, matiere, note, coefficient, periode, date) VALUES (?, ?, ?, ?, ?, ?)', [studentId, matiere, note, coefficient, periode, date]);
+    const [studentRows] = await pool.execute('SELECT prenom, parentId FROM students WHERE id = ?', [studentId]);
+    if (studentRows.length > 0) {
+        await addNotification(studentRows[0].parentId, `Nouvelle note pour ${studentRows[0].prenom} en ${matiere}: ${note}/20.`, 'info', 'suivi');
+    }
     res.status(201).json({ id: result.insertId, ...req.body });
 }));
 app.put('/api/grades/:id', asyncHandler(async (req, res) => {
-    const db = await getDbPool();
-    const { id } = req.params;
     const { studentId, matiere, note, coefficient, periode, date } = req.body;
-    await db.query('UPDATE grades SET studentId = ?, matiere = ?, note = ?, coefficient = ?, periode = ?, date = ? WHERE id = ?', [studentId, matiere, note, coefficient, periode, date, id]);
-    res.json({ id, ...req.body });
+    await pool.execute('UPDATE grades SET studentId = ?, matiere = ?, note = ?, coefficient = ?, periode = ?, date = ? WHERE id = ?', [studentId, matiere, note, coefficient, periode, date, req.params.id]);
+    res.json({ id: parseInt(req.params.id), ...req.body });
 }));
-app.delete('/api/grades/:id', deleteById('grades'));
+app.delete('/api/grades/:id', asyncHandler(async (req, res) => { await pool.execute('DELETE FROM grades WHERE id = ?', [req.params.id]); res.status(204).send(); }));
 
-app.get('/api/attendance', getAll('attendance'));
+
+// Attendance
+app.get('/api/attendance', asyncHandler(async (req, res) => { const [rows] = await pool.execute('SELECT * FROM attendance'); res.json(rows); }));
 app.post('/api/attendance', asyncHandler(async (req, res) => {
-    const db = await getDbPool();
     const { studentId, date, statut, justification } = req.body;
+    const [result] = await pool.execute('INSERT INTO attendance (studentId, date, statut, justification) VALUES (?, ?, ?, ?)', [studentId, date, statut, justification]);
+    
+    const [studentRows] = await pool.execute('SELECT prenom, parentId FROM students WHERE id = ?', [studentId]);
+    const student = studentRows[0];
+    let absenceThresholdReached = false;
 
-    const connection = await db.getConnection();
+    if (student) {
+        const isAbsence = statut === 'Absent (Non justifié)' || statut === 'Absent (Justifié)';
+        let message = `Nouveau suivi pour ${student.prenom}: ${statut} le ${new Date(date).toLocaleDateString('fr-FR')}.`;
+
+        if (isAbsence) {
+            const [absenceRows] = await pool.execute("SELECT COUNT(*) as count FROM attendance WHERE studentId = ? AND (statut = 'Absent (Non justifié)' OR statut = 'Absent (Justifié)')", [studentId]);
+            const absenceCount = absenceRows[0].count;
+
+            if (absenceCount >= 3) {
+                absenceThresholdReached = true;
+                message = `⚠️ ${student.prenom} a atteint ${absenceCount} absences. Veuillez contacter l'administration.`;
+                await addNotification(student.parentId, message, 'error', 'suivi');
+            } else {
+                await addNotification(student.parentId, message, 'error', 'suivi');
+            }
+        } else {
+             await addNotification(student.parentId, message, 'info', 'suivi');
+        }
+    }
+    
+    res.status(201).json({ id: result.insertId, ...req.body, absenceThresholdReached });
+}));
+app.put('/api/attendance/:id', asyncHandler(async (req, res) => {
+    const { studentId, date, statut, justification } = req.body;
+    await pool.execute('UPDATE attendance SET studentId = ?, date = ?, statut = ?, justification = ? WHERE id = ?', [studentId, date, statut, justification, req.params.id]);
+    res.json({ id: parseInt(req.params.id), ...req.body });
+}));
+app.delete('/api/attendance/:id', asyncHandler(async (req, res) => { await pool.execute('DELETE FROM attendance WHERE id = ?', [req.params.id]); res.status(204).send(); }));
+
+
+// Observations
+app.get('/api/observations', asyncHandler(async (req, res) => { const [rows] = await pool.execute('SELECT * FROM observations'); res.json(rows); }));
+app.post('/api/observations', asyncHandler(async (req, res) => {
+    const { studentId, date, content, author } = req.body;
+    const [result] = await pool.execute('INSERT INTO observations (studentId, date, content, author) VALUES (?, ?, ?, ?)', [studentId, date, content, author]);
+     const [studentRows] = await pool.execute('SELECT prenom, parentId FROM students WHERE id = ?', [studentId]);
+    if (studentRows.length > 0) {
+        await addNotification(studentRows[0].parentId, `Nouvelle observation pour ${studentRows[0].prenom}.`, 'info', 'suivi');
+    }
+    res.status(201).json({ id: result.insertId, ...req.body });
+}));
+app.put('/api/observations/:id', asyncHandler(async (req, res) => {
+    const { studentId, date, content, author } = req.body;
+    await pool.execute('UPDATE observations SET studentId = ?, date = ?, content = ?, author = ? WHERE id = ?', [studentId, date, content, author, req.params.id]);
+    res.json({ id: parseInt(req.params.id), ...req.body });
+}));
+app.delete('/api/observations/:id', asyncHandler(async (req, res) => { await pool.execute('DELETE FROM observations WHERE id = ?', [req.params.id]); res.status(204).send(); }));
+
+// Timetable
+app.get('/api/timetable', asyncHandler(async (req, res) => { const [rows] = await pool.execute('SELECT * FROM timetable_entries'); res.json(rows); }));
+app.post('/api/timetable', asyncHandler(async (req, res) => {
+    const { classe } = req.query;
+    const entries = req.body;
+    const connection = await pool.getConnection();
     try {
         await connection.beginTransaction();
-
-        const [result] = await connection.query('INSERT INTO attendance (studentId, date, statut, justification) VALUES (?, ?, ?, ?)', [studentId, date, statut, justification]);
-        const [[student]] = await connection.query('SELECT id, nom, prenom, parentId FROM students WHERE id = ?', [studentId]);
-
-        let absenceThresholdReached = false;
-
-        if (student && student.parentId) {
-            let notificationMessage = `Nouveau suivi pour ${student.prenom}: ${statut} le ${new Date(date).toLocaleDateString('fr-FR')}.`;
-            let notificationType = statut.includes('Absent') ? 'error' : 'info';
-
-            if (statut.includes('Absent')) {
-                const [absences] = await connection.query(
-                    "SELECT COUNT(*) as count FROM attendance WHERE studentId = ? AND (statut = 'Absent (Justifié)' OR statut = 'Absent (Non justifié)')",
-                    [studentId]
-                );
-                const absenceCount = absences[0].count;
-
-                if (absenceCount >= 3) {
-                    notificationMessage = `⚠️ ATTENTION : ${student.prenom} ${student.nom} a cumulé ${absenceCount} absences. Veuillez contacter l'administration.`;
-                    notificationType = 'error';
-                    absenceThresholdReached = true;
-                }
-            }
-            
-            await addNotification(connection, { 
-                userId: student.parentId, 
-                message: notificationMessage,
-                type: notificationType, 
-                link: 'suivi' 
-            });
+        await connection.execute('DELETE FROM timetable_entries WHERE classe = ?', [classe]);
+        for (const entry of entries) {
+            await connection.execute('INSERT INTO timetable_entries (day, time, subject, teacher, classe) VALUES (?, ?, ?, ?, ?)', [entry.day, entry.time, entry.subject, entry.teacher, classe]);
         }
-        
         await connection.commit();
-        res.status(201).json({ id: result.insertId, ...req.body, absenceThresholdReached });
-
+        const [rows] = await connection.execute('SELECT * FROM timetable_entries WHERE classe = ?', [classe]);
+        res.status(201).json(rows);
     } catch (error) {
         await connection.rollback();
         throw error;
@@ -600,252 +510,59 @@ app.post('/api/attendance', asyncHandler(async (req, res) => {
         connection.release();
     }
 }));
-app.put('/api/attendance/:id', asyncHandler(async (req, res) => {
-    const db = await getDbPool();
-    const { id } = req.params;
-    const { studentId, date, statut, justification } = req.body;
-    await db.query('UPDATE attendance SET studentId = ?, date = ?, statut = ?, justification = ? WHERE id = ?', [studentId, date, statut, justification, id]);
-    res.json({ id, ...req.body });
-}));
-app.delete('/api/attendance/:id', deleteById('attendance'));
 
-app.get('/api/observations', getAll('observations'));
-app.post('/api/observations', asyncHandler(async (req, res) => {
-    const db = await getDbPool();
-    const { studentId, content, date, author } = req.body;
-    const [result] = await db.query('INSERT INTO observations (studentId, content, date, author) VALUES (?, ?, ?, ?)', [studentId, content, date, author || 'Administration']);
-    const [[student]] = await db.query('SELECT parentId, prenom FROM students WHERE id = ?', [studentId]);
-    if (student) addNotification(db, { userId: student.parentId, message: `Nouvelle observation pour ${student.prenom}.`, type: 'info', link: 'observations' });
-    res.status(201).json({ id: result.insertId, ...req.body });
-}));
-app.put('/api/observations/:id', asyncHandler(async (req, res) => {
-    const db = await getDbPool();
-    const { id } = req.params;
-    const { studentId, content, date, author } = req.body;
-    await db.query('UPDATE observations SET studentId = ?, content = ?, date = ?, author = ? WHERE id = ?', [studentId, content, date, author || 'Administration', id]);
-    res.json({ id, ...req.body });
-}));
-app.delete('/api/observations/:id', deleteById('observations'));
 
-// TIMETABLE
-app.post('/api/timetable', asyncHandler(async (req, res) => {
-    const db = await getDbPool();
-    const { classe } = req.query;
-    if (!classe) return res.status(400).json({ message: 'La classe est requise.' });
-    const client = await db.getConnection();
-    try {
-        await client.beginTransaction();
-        await client.query('DELETE FROM timetable_entries WHERE LOWER(classe) = LOWER(?)', [classe]);
-        for (const entry of req.body) {
-            await client.query('INSERT INTO timetable_entries (day, time, subject, teacher, classe) VALUES (?, ?, ?, ?, ?)', [entry.day, entry.time, entry.subject, entry.teacher, classe]);
-        }
-        
-        const [studentsInClass] = await client.query('SELECT parentId FROM students WHERE LOWER(classe) = LOWER(?)', [classe]);
-        const parentIds = [...new Set(studentsInClass.map(s => s.parentId))];
-        
-        for (const parentId of parentIds) {
-            if (parentId) {
-                await addNotification(client, { 
-                    userId: parentId, 
-                    message: `L'emploi du temps pour la classe ${classe} a été mis à jour.`, 
-                    type: 'info', 
-                    link: 'suivi' 
-                });
-            }
-        }
-        await client.commit();
-        const [updatedRows] = await client.query('SELECT * FROM timetable_entries WHERE LOWER(classe) = LOWER(?)', [classe]);
-        res.status(201).json(updatedRows);
-    } catch (err) {
-        await client.rollback(); throw err;
-    } finally {
-        client.release();
-    }
-}));
-app.get('/api/timetable', getAll('timetable_entries'));
-
-// MESSAGES (FINAL ROBUST VERSION)
+// Messages
+app.get('/api/messages', asyncHandler(async (req, res) => { const [rows] = await pool.execute('SELECT * FROM messages ORDER BY date ASC'); res.json(rows); }));
 app.post('/api/messages', asyncHandler(async (req, res) => {
-    const db = await getDbPool();
     const { senderId, receiverId, contenu, date, attachmentName, attachmentUrl } = req.body;
-
-    const numSenderId = Number(senderId);
-    if (!Number.isInteger(numSenderId) || numSenderId <= 0) {
-        return res.status(400).json({ message: `ID de l'expéditeur invalide. Reçu: '${senderId}'.` });
-    }
-    const numReceiverId = Number(receiverId);
-    if (!Number.isInteger(numReceiverId) || numReceiverId <= 0) {
-        return res.status(400).json({ message: `ID du destinataire invalide. Reçu: '${receiverId}'.` });
-    }
     
-    const connection = await db.getConnection();
-    try {
-        await connection.beginTransaction();
-
-        const [senders] = await connection.query('SELECT id, nom FROM users WHERE id = ?', [numSenderId]);
-        if (senders.length === 0) {
-            await connection.rollback();
-            return res.status(400).json({ message: `Action impossible : l'expéditeur (ID ${numSenderId}) n'existe pas. Veuillez vous reconnecter.` });
-        }
-        const [receivers] = await connection.query('SELECT id FROM users WHERE id = ?', [numReceiverId]);
-        if (receivers.length === 0) {
-            await connection.rollback();
-            return res.status(400).json({ message: `Action impossible : le destinataire (ID ${numReceiverId}) n'existe pas.` });
-        }
-        
-        const [result] = await connection.query(
-            'INSERT INTO messages (senderId, receiverId, contenu, date, attachmentName, attachmentUrl) VALUES (?, ?, ?, ?, ?, ?)',
-            [numSenderId, numReceiverId, contenu || null, date, attachmentName || null, attachmentUrl || null]
-        );
-
-        await addNotification(connection, {
-            userId: numReceiverId,
-            message: `Nouveau message de ${senders[0].nom}.`,
-            type: 'info',
-            link: 'messages'
-        });
-        
-        await connection.commit();
-
-        const [[newMessage]] = await connection.query('SELECT * FROM messages WHERE id = ?', [result.insertId]);
-        res.status(201).json(newMessage);
-
-    } catch (error) {
-        await connection.rollback();
-        console.error("[MESSAGES] ERREUR:", error);
-        res.status(500).json({ message: `Échec de l'envoi du message : ${error.message}` });
-    } finally {
-        connection.release();
+    // Vérifier si les utilisateurs existent avant d'envoyer le message
+    const [senderExists] = await pool.execute('SELECT id FROM users WHERE id = ?', [senderId]);
+    const [receiverExists] = await pool.execute('SELECT id FROM users WHERE id = ?', [receiverId]);
+    if (senderExists.length === 0 || receiverExists.length === 0) {
+        return res.status(404).json({ message: "L'expéditeur ou le destinataire est introuvable." });
     }
-}));
-app.get('/api/messages', getAll('messages'));
 
-// EVENTS
-app.get('/api/events', getAll('events'));
-app.post('/api/events', asyncHandler(async (req, res) => {
-    const db = await getDbPool();
-    const { title, description, event_date } = req.body;
-    const [result] = await db.query('INSERT INTO events (title, description, event_date) VALUES (?, ?, ?)', [title, description, event_date]);
-    const [parents] = await db.query("SELECT id FROM users WHERE role = 'parent'");
-    for (const parent of parents) addNotification(db, { userId: parent.id, message: `Nouvel événement : "${title}" le ${new Date(event_date).toLocaleDateString('fr-FR')}.`, type: 'info', link: 'evenements' });
+    const [result] = await pool.execute(
+        'INSERT INTO messages (senderId, receiverId, contenu, date, attachmentName, attachmentUrl) VALUES (?, ?, ?, ?, ?, ?)',
+        [senderId, receiverId, contenu, date, attachmentName, attachmentUrl]
+    );
     res.status(201).json({ id: result.insertId, ...req.body });
 }));
-app.put('/api/events/:id', asyncHandler(async (req, res) => {
-    const db = await getDbPool();
-    const { id } = req.params;
-    const { title, description, event_date } = req.body;
-    await db.query('UPDATE events SET title = ?, description = ?, event_date = ? WHERE id = ?', [title, description, event_date, id]);
-    res.json({ id, ...req.body });
-}));
-app.delete('/api/events/:id', deleteById('events'));
 
-// DOCUMENTS
-app.get('/api/documents', getAll('documents'));
-app.post('/api/documents', asyncHandler(async (req, res) => {
-    const db = await getDbPool();
-    const { title, description, url, mimeType } = req.body;
-    const [result] = await db.query('INSERT INTO documents (title, description, url, mimeType) VALUES (?, ?, ?, ?)', [title, description, url, mimeType]);
-    const [parents] = await db.query("SELECT id FROM users WHERE role = 'parent'");
-    for (const parent of parents) addNotification(db, { userId: parent.id, message: `Nouveau document disponible : "${title}".`, type: 'info', link: 'documents' });
-    res.status(201).json({ id: result.insertId, ...req.body });
-}));
-app.put('/api/documents/:id', asyncHandler(async (req, res) => {
-    const db = await getDbPool();
-    const { id } = req.params;
-    const { title, description, url, mimeType } = req.body;
-    await db.query('UPDATE documents SET title = ?, description = ?, url = ?, mimeType = ? WHERE id = ?', [title, description, url, mimeType, id]);
-    res.json({ id, ...req.body });
-}));
-app.delete('/api/documents/:id', deleteById('documents'));
+// Events, Documents, Menus... (le reste des endpoints)
+app.get('/api/events', asyncHandler(async (req, res) => { const [rows] = await pool.execute('SELECT * FROM events ORDER BY event_date DESC'); res.json(rows); }));
+app.post('/api/events', asyncHandler(async (req, res) => { const { title, description, event_date } = req.body; const [result] = await pool.execute('INSERT INTO events (title, description, event_date) VALUES (?, ?, ?)', [title, description, event_date]); res.status(201).json({ id: result.insertId, ...req.body }); }));
+app.put('/api/events/:id', asyncHandler(async (req, res) => { const { title, description, event_date } = req.body; await pool.execute('UPDATE events SET title = ?, description = ?, event_date = ? WHERE id = ?', [title, description, event_date, req.params.id]); res.json({ id: parseInt(req.params.id), ...req.body }); }));
+app.delete('/api/events/:id', asyncHandler(async (req, res) => { await pool.execute('DELETE FROM events WHERE id = ?', [req.params.id]); res.status(204).send(); }));
 
-// MENUS
-app.get('/api/menus', getAll('daily_menus'));
-app.post('/api/menus', asyncHandler(async (req, res) => {
-    const db = await getDbPool();
-    const { date, starter, mainCourse, dessert, snack, photoUrl } = req.body;
-    
-    const [existing] = await db.query('SELECT id FROM daily_menus WHERE date = ? LIMIT 1', [date]);
+app.get('/api/documents', asyncHandler(async (req, res) => { const [rows] = await pool.execute('SELECT * FROM documents'); res.json(rows); }));
+app.post('/api/documents', asyncHandler(async (req, res) => { const { title, description, url, mimeType } = req.body; const [result] = await pool.execute('INSERT INTO documents (title, description, url, mimeType) VALUES (?, ?, ?, ?)', [title, description, url, mimeType]); res.status(201).json({ id: result.insertId, ...req.body }); }));
+app.put('/api/documents/:id', asyncHandler(async (req, res) => { const { title, description, url, mimeType } = req.body; await pool.execute('UPDATE documents SET title = ?, description = ?, url = ?, mimeType = ? WHERE id = ?', [title, description, url, mimeType, req.params.id]); res.json({ id: parseInt(req.params.id), ...req.body }); }));
+app.delete('/api/documents/:id', asyncHandler(async (req, res) => { await pool.execute('DELETE FROM documents WHERE id = ?', [req.params.id]); res.status(204).send(); }));
 
-    if (existing.length > 0) {
-        const existingId = existing[0].id;
-        await db.query('UPDATE daily_menus SET starter = ?, mainCourse = ?, dessert = ?, snack = ?, photoUrl = ? WHERE id = ?', [starter, mainCourse, dessert, snack, photoUrl || null, existingId]);
-        const [[updatedRow]] = await db.query('SELECT * FROM daily_menus WHERE id = ?', [existingId]);
-        res.status(200).json(updatedRow);
-    } else {
-        const [result] = await db.query('INSERT INTO daily_menus (date, starter, mainCourse, dessert, snack, photoUrl) VALUES (?, ?, ?, ?, ?, ?)', [date, starter, mainCourse, dessert, snack, photoUrl || null]);
-        
-        const menuDate = new Date(date);
-        const dayOfWeek = menuDate.getUTCDay();
-        const diff = menuDate.getUTCDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1);
-        const startOfWeekStr = new Date(menuDate.setUTCDate(diff)).toISOString().split('T')[0];
+app.get('/api/menus', asyncHandler(async (req, res) => { const [rows] = await pool.execute('SELECT * FROM daily_menus'); res.json(rows); }));
+app.post('/api/menus', asyncHandler(async (req, res) => { const { date, starter, mainCourse, dessert, snack, photoUrl } = req.body; const [result] = await pool.execute('INSERT INTO daily_menus (date, starter, mainCourse, dessert, snack, photoUrl) VALUES (?, ?, ?, ?, ?, ?)', [date, starter, mainCourse, dessert, snack, photoUrl]); res.status(201).json({ id: result.insertId, ...req.body }); }));
+app.put('/api/menus/:id', asyncHandler(async (req, res) => { const { date, starter, mainCourse, dessert, snack, photoUrl } = req.body; await pool.execute('UPDATE daily_menus SET date = ?, starter = ?, mainCourse = ?, dessert = ?, snack = ?, photoUrl = ? WHERE id = ?', [date, starter, mainCourse, dessert, snack, photoUrl, req.params.id]); res.json({ id: parseInt(req.params.id), ...req.body }); }));
+app.delete('/api/menus/:id', asyncHandler(async (req, res) => { await pool.execute('DELETE FROM daily_menus WHERE id = ?', [req.params.id]); res.status(204).send(); }));
 
-        const [existingNotifications] = await db.query("SELECT id FROM notifications WHERE message = ? AND timestamp >= ?", ['Le menu de la semaine est disponible.', startOfWeekStr]);
-        if (existingNotifications.length === 0) {
-            const [parents] = await db.query("SELECT id FROM users WHERE role = 'parent'");
-            for (const parent of parents) {
-                addNotification(db, { userId: parent.id, message: 'Le menu de la semaine est disponible.', type: 'info', link: 'cantine' });
-            }
-        }
-        
-        const [[newMenu]] = await db.query('SELECT * FROM daily_menus WHERE id = ?', [result.insertId]);
-        res.status(201).json(newMenu);
-    }
-}));
-app.put('/api/menus/:id', asyncHandler(async (req, res) => {
-    const db = await getDbPool();
-    const { id } = req.params;
-    const { date, starter, mainCourse, dessert, snack, photoUrl } = req.body;
-    const [existing] = await db.query('SELECT id FROM daily_menus WHERE date = ? AND id != ?', [date, id]);
-    if (existing.length > 0) return res.status(409).json({ message: `Un menu existe déjà pour la date ${new Date(date).toLocaleDateString('fr-FR')}.` });
-    await db.query('UPDATE daily_menus SET date = ?, starter = ?, mainCourse = ?, dessert = ?, snack = ?, photoUrl = ? WHERE id = ?', [date, starter, mainCourse, dessert, snack, photoUrl || null, id]);
-    const [[updatedRow]] = await db.query('SELECT * FROM daily_menus WHERE id = ?', [id]);
-    if (!updatedRow) {
-        return res.status(404).json({ message: 'Menu non trouvé après la mise à jour.' });
-    }
-    res.json(updatedRow);
-}));
-app.delete('/api/menus/:id', deleteById('daily_menus'));
+// Notifications
+app.get('/api/notifications', asyncHandler(async (req, res) => { const [rows] = await pool.execute('SELECT * FROM notifications ORDER BY timestamp DESC'); res.json(rows); }));
+app.post('/api/notifications/:id/read', asyncHandler(async (req, res) => { await pool.execute('UPDATE notifications SET `read` = TRUE WHERE id = ?', [req.params.id]); res.json({ success: true }); }));
+app.post('/api/notifications/user/:userId/read-all', asyncHandler(async (req, res) => { await pool.execute('UPDATE notifications SET `read` = TRUE WHERE userId = ?', [req.params.userId]); res.json({ success: true }); }));
 
-// NOTIFICATIONS
-app.get('/api/notifications', asyncHandler(async (req, res) => {
-    const db = await getDbPool();
-    const [rows] = await db.query('SELECT * FROM notifications ORDER BY timestamp DESC');
-    res.json(rows);
-}));
-app.post('/api/notifications/:id/read', asyncHandler(async (req, res) => {
-    const db = await getDbPool();
-    await db.query('UPDATE notifications SET `read` = true WHERE id = ?', [req.params.id]);
-    res.json({ success: true });
-}));
-app.post('/api/notifications/user/:userId/read-all', asyncHandler(async (req, res) => {
-    const db = await getDbPool();
-    await db.query('UPDATE notifications SET `read` = true WHERE userId = ?', [req.params.userId]);
-    res.json({ success: true });
-}));
-
-// --- Gestionnaire d'erreurs final ---
+// Gestionnaire d'erreurs final
 app.use((err, req, res, next) => {
-    console.error("Erreur finale non gérée:", err);
-    res.status(500).send('Quelque chose s\'est mal passé !');
+    console.error(err.stack);
+    res.status(500).json({ message: err.message || 'Une erreur interne est survenue.' });
 });
 
-// --- Démarrage du serveur ---
-console.log("🚀 Démarrage du serveur...");
-initializeDatabase()
-    .then(initializedPool => {
-        if (initializedPool) {
-            app.listen(port, () => {
-                console.log(`✅ Serveur prêt et à l'écoute sur le port ${port}`);
-                if (port === 3001) {
-                    console.log(`   Visitez http://localhost:${port}/api/status pour vérifier la connexion.`);
-                }
-            });
-        } else {
-            console.error("❌ FATAL: L'initialisation de la base de données a échoué. Le serveur ne démarrera pas.");
-            process.exit(1);
-        }
-    })
-    .catch(error => {
-        console.error("❌ FATAL: Une erreur critique a empêché le démarrage du serveur.", error);
-        process.exit(1);
-    });
+// Lancement du serveur
+app.listen(PORT, async () => {
+  await connectToDatabase();
+  if (pool) {
+      await initializeDatabase();
+  }
+  console.log(`✅ Serveur prêt et à l'écoute sur le port ${PORT}`);
+});
