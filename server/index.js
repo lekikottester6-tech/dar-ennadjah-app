@@ -489,7 +489,26 @@ app.put('/api/students/:id', asyncHandler(async (req, res) => {
 app.get('/api/teachers', asyncHandler(async (req, res) => {
     const db = await getDbPool();
     const [rows] = await db.query('SELECT * FROM teachers');
-    res.json(rows.map(t => ({ ...t, classes: t.classes ? JSON.parse(t.classes) : [] })));
+
+    const teachers = rows.map(t => {
+        let parsedClasses = [];
+        // Only attempt to parse if t.classes is a non-empty string
+        if (t.classes && typeof t.classes === 'string') {
+            try {
+                const parsed = JSON.parse(t.classes);
+                // Ensure the parsed result is actually an array
+                if (Array.isArray(parsed)) {
+                    parsedClasses = parsed;
+                }
+            } catch (e) {
+                // If parsing fails, log a warning but don't crash. Default to empty array.
+                console.warn(`[WARN] Could not parse 'classes' JSON for teacher ID ${t.id}. Value was: "${t.classes}". Defaulting to empty array.`);
+            }
+        }
+        return { ...t, classes: parsedClasses };
+    });
+
+    res.json(teachers);
 }));
 app.post('/api/teachers', asyncHandler(async (req, res) => {
     const db = await getDbPool();
