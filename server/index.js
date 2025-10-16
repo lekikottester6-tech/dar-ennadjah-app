@@ -379,10 +379,29 @@ app.get('/api/users/:id', asyncHandler(async (req, res) => {
 }));
 app.get('/api/admin-user', asyncHandler(async (req, res) => {
     const db = await getDbPool();
-    const [users] = await db.query("SELECT id, nom, email, role FROM users WHERE role = 'admin' LIMIT 1");
+    let [users] = await db.query("SELECT id, nom, email, role FROM users WHERE role = 'admin' LIMIT 1");
+
     if (users.length === 0) {
-        return res.status(404).json({ message: "Aucun utilisateur admin n'a été trouvé." });
+        // L'admin n'existe pas, nous essayons de le créer.
+        // `INSERT IGNORE` empêche les erreurs si un autre processus le crée en même temps.
+        console.warn("⚠️ Aucun compte administrateur trouvé. Tentative de création...");
+        const defaultAdminPassword = process.env.ADMIN_PASSWORD || 'admin';
+        await db.query(
+            'INSERT IGNORE INTO users (nom, email, role, password, telephone) VALUES (?, ?, ?, ?, ?)',
+            ['Admin', 'admin@darennadjah.dz', 'admin', defaultAdminPassword, '0550000000']
+        );
+        
+        // Nous réinterrogeons la base de données ; il devrait exister maintenant.
+        [users] = await db.query("SELECT id, nom, email, role FROM users WHERE role = 'admin' LIMIT 1");
+
+        if (users.length === 0) {
+            // Si il n'existe toujours pas, quelque chose de grave s'est produit.
+            console.error("❌ FATAL: Impossible de créer ou de trouver le compte admin même après une tentative d'insertion.");
+            return res.status(500).json({ message: "Le compte administrateur est manquant et n'a pas pu être créé." });
+        }
+        console.log("✅ Compte administrateur par défaut créé/trouvé avec succès.");
     }
+    
     res.json(users[0]);
 }));
 app.post('/api/users', asyncHandler(async (req, res) => {
@@ -470,7 +489,7 @@ app.put('/api/students/:id', asyncHandler(async (req, res) => {
 app.get('/api/teachers', asyncHandler(async (req, res) => {
     const db = await getDbPool();
     const [rows] = await db.query('SELECT * FROM teachers');
-    res.json(rows.map(t => ({ ...t, classes: t.classes || [] })));
+    res.json(rows.map(t => ({ ...t, classes: t.classes ? JSON.parse(t.classes) : [] })));
 }));
 app.post('/api/teachers', asyncHandler(async (req, res) => {
     const db = await getDbPool();
@@ -515,10 +534,51 @@ app.get('/api/attendance', getAll('attendance'));
 app.post('/api/attendance', asyncHandler(async (req, res) => {
     const db = await getDbPool();
     const { studentId, date, statut, justification } = req.body;
-    const [result] = await db.query('INSERT INTO attendance (studentId, date, statut, justification) VALUES (?, ?, ?, ?)', [studentId, date, statut, justification]);
-    const [[student]] = await db.query('SELECT parentId, prenom FROM students WHERE id = ?', [studentId]);
-    if (student) addNotification(db, { userId: student.parentId, message: `Nouveau suivi pour ${student.prenom}: ${statut} le ${new Date(date).toLocaleDateString('fr-FR')}.`, type: statut.includes('Absent') ? 'error' : 'info', link: 'suivi' });
-    res.status(201).json({ id: result.insertId, ...req.body });
+
+    const connection = await db.getConnection();
+    try {
+        await connection.beginTransaction();
+
+        const [result] = await connection.query('INSERT INTO attendance (studentId, date, statut, justification) VALUES (?, ?, ?, ?)', [studentId, date, statut, justification]);
+        const [[student]] = await connection.query('SELECT id, nom, prenom, parentId FROM students WHERE id = ?', [studentId]);
+
+        let absenceThresholdReached = false;
+
+        if (student && student.parentId) {
+            let notificationMessage = `Nouveau suivi pour ${student.prenom}: ${statut} le ${new Date(date).toLocaleDateString('fr-FR')}.`;
+            let notificationType = statut.includes('Absent') ? 'error' : 'info';
+
+            if (statut.includes('Absent')) {
+                const [absences] = await connection.query(
+                    "SELECT COUNT(*) as count FROM attendance WHERE studentId = ? AND (statut = 'Absent (Justifié)' OR statut = 'Absent (Non justifié)')",
+                    [studentId]
+                );
+                const absenceCount = absences[0].count;
+
+                if (absenceCount >= 3) {
+                    notificationMessage = `⚠️ ATTENTION : ${student.prenom} ${student.nom} a cumulé ${absenceCount} absences. Veuillez contacter l'administration.`;
+                    notificationType = 'error';
+                    absenceThresholdReached = true;
+                }
+            }
+            
+            await addNotification(connection, { 
+                userId: student.parentId, 
+                message: notificationMessage,
+                type: notificationType, 
+                link: 'suivi' 
+            });
+        }
+        
+        await connection.commit();
+        res.status(201).json({ id: result.insertId, ...req.body, absenceThresholdReached });
+
+    } catch (error) {
+        await connection.rollback();
+        throw error;
+    } finally {
+        connection.release();
+    }
 }));
 app.put('/api/attendance/:id', asyncHandler(async (req, res) => {
     const db = await getDbPool();
