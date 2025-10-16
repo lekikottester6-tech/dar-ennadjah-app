@@ -485,6 +485,7 @@ app.put('/api/students/:id', asyncHandler(async (req, res) => {
     res.json({ id, ...req.body });
 }));
 
+
 // TEACHERS
 app.get('/api/teachers', asyncHandler(async (req, res) => {
     const db = await getDbPool();
