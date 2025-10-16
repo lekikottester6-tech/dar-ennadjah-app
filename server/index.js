@@ -375,14 +375,34 @@ app.post('/api/students', asyncHandler(async (req, res) => {
 app.put('/api/students/:id', asyncHandler(async (req, res) => {
     const { id } = req.params;
     const { nom, prenom, dateNaissance, classe, niveauScolaire, parentId, isArchived, photoUrl } = req.body;
-    
-    // ** LA CORRECTION FINALE ET DÉFINITIVE EST ICI **
-    // Cette requête inclut bien le champ `photoUrl` et l'ordre des paramètres est correct,
-    // garantissant que la photo est sauvegardée et non écrasée par une autre valeur.
-    await pool.execute(
-        'UPDATE students SET nom = ?, prenom = ?, dateNaissance = ?, classe = ?, niveauScolaire = ?, parentId = ?, isArchived = ?, photoUrl = ? WHERE id = ?',
-        [nom, prenom, dateNaissance, classe, niveauScolaire, parentId, isArchived, photoUrl, id]
-    );
+
+    // Requête de mise à jour corrigée et clarifiée pour assurer que la photo est bien mise à jour.
+    const sql = `
+        UPDATE students 
+        SET 
+            nom = ?, 
+            prenom = ?, 
+            dateNaissance = ?, 
+            classe = ?, 
+            niveauScolaire = ?, 
+            parentId = ?, 
+            isArchived = ?, 
+            photoUrl = ? 
+        WHERE id = ?`;
+        
+    const params = [
+        nom, 
+        prenom, 
+        dateNaissance, 
+        classe, 
+        niveauScolaire, 
+        parentId, 
+        isArchived, 
+        photoUrl, 
+        id
+    ];
+
+    await pool.execute(sql, params);
     
     res.json({ id: parseInt(id), ...req.body });
 }));
