@@ -12,7 +12,9 @@ const cors = require('cors');
 const nodemailer = require('nodemailer');
 
 const app = express();
-const port = 3001;
+// --- CORRECTION CRUCIALE POUR RENDER ---
+// Utilise le port assigné par Render, ou 3001 pour le développement local.
+const port = process.env.PORT || 3001;
 
 // --- MIDDLEWARE SETUP ---
 
@@ -188,6 +190,24 @@ app.post('/api/parent-login', asyncHandler(async (req, res) => {
     res.json(userWithoutPassword);
 }));
 
+app.post('/api/admin-login', asyncHandler(async (req, res) => {
+    const db = await getDbPool();
+    const { password } = req.body;
+    if (!password) {
+        return res.status(400).json({ message: 'Le mot de passe est requis.' });
+    }
+    const [users] = await db.query("SELECT * FROM users WHERE role = 'admin'");
+    if (users.length === 0) {
+        return res.status(404).json({ message: 'Aucun compte administrateur trouvé.' });
+    }
+    const adminUser = users[0];
+    if (adminUser.password !== password) {
+        return res.status(401).json({ message: 'Mot de passe incorrect.' });
+    }
+    const { password: userPassword, ...userWithoutPassword } = adminUser;
+    res.json(userWithoutPassword);
+}));
+
 // USERS
 app.get('/api/users', getAll('users'));
 app.get('/api/users/:id', asyncHandler(async (req, res) => {
@@ -196,6 +216,14 @@ app.get('/api/users/:id', asyncHandler(async (req, res) => {
     const [users] = await db.query("SELECT id, nom, email, role, telephone FROM users WHERE id = ?", [id]);
     if (users.length === 0) {
         return res.status(404).json({ message: 'Utilisateur non trouvé.' });
+    }
+    res.json(users[0]);
+}));
+app.get('/api/admin-user', asyncHandler(async (req, res) => {
+    const db = await getDbPool();
+    const [users] = await db.query("SELECT id, nom, email, role FROM users WHERE role = 'admin' LIMIT 1");
+    if (users.length === 0) {
+        return res.status(404).json({ message: "Aucun utilisateur admin n'a été trouvé." });
     }
     res.json(users[0]);
 }));
@@ -398,7 +426,7 @@ app.post('/api/timetable', asyncHandler(async (req, res) => {
 }));
 app.get('/api/timetable', getAll('timetable_entries'));
 
-// MESSAGES (REFACTORED AND FINAL - ROBUST VERSION 2)
+// MESSAGES (FINAL ROBUST VERSION)
 app.post('/api/messages', asyncHandler(async (req, res) => {
     const db = await getDbPool();
     const { senderId, receiverId, contenu, date, attachmentName, attachmentUrl } = req.body;
@@ -412,19 +440,20 @@ app.post('/api/messages', asyncHandler(async (req, res) => {
         return res.status(400).json({ message: `ID du destinataire invalide. Reçu: '${receiverId}'.` });
     }
     
-    // Vérification explicite AVANT la transaction pour une erreur plus claire
-    const [senders] = await db.query('SELECT id FROM users WHERE id = ?', [numSenderId]);
-    if (senders.length === 0) {
-        return res.status(400).json({ message: `Action impossible : l'expéditeur (ID ${numSenderId}) n'existe pas. Veuillez vous reconnecter.` });
-    }
-    const [receivers] = await db.query('SELECT id FROM users WHERE id = ?', [numReceiverId]);
-    if (receivers.length === 0) {
-        return res.status(400).json({ message: `Action impossible : le destinataire (ID ${numReceiverId}) n'existe pas.` });
-    }
-    
     const connection = await db.getConnection();
     try {
         await connection.beginTransaction();
+
+        const [senders] = await connection.query('SELECT id, nom FROM users WHERE id = ?', [numSenderId]);
+        if (senders.length === 0) {
+            await connection.rollback();
+            return res.status(400).json({ message: `Action impossible : l'expéditeur (ID ${numSenderId}) n'existe pas. Veuillez vous reconnecter.` });
+        }
+        const [receivers] = await connection.query('SELECT id FROM users WHERE id = ?', [numReceiverId]);
+        if (receivers.length === 0) {
+            await connection.rollback();
+            return res.status(400).json({ message: `Action impossible : le destinataire (ID ${numReceiverId}) n'existe pas.` });
+        }
         
         const [result] = await connection.query(
             'INSERT INTO messages (senderId, receiverId, contenu, date, attachmentName, attachmentUrl) VALUES (?, ?, ?, ?, ?, ?)',
@@ -433,7 +462,7 @@ app.post('/api/messages', asyncHandler(async (req, res) => {
 
         await addNotification(connection, {
             userId: numReceiverId,
-            message: `Nouveau message de ${senders[0].nom || 'un utilisateur'}.`,
+            message: `Nouveau message de ${senders[0].nom}.`,
             type: 'info',
             link: 'messages'
         });
@@ -564,6 +593,8 @@ app.use((err, req, res, next) => {
 
 // Start server
 app.listen(port, () => {
-    console.log(`Le serveur backend pour Dar Ennadjah est en cours d'exécution sur http://localhost:${port}`);
-    console.log(`Visitez http://localhost:${port}/api/status pour vérifier la connexion à la base de données.`);
+    console.log(`Le serveur backend pour Dar Ennadjah est en cours d'exécution sur le port ${port}`);
+    if (port === 3001) { // Affiche le message localhost uniquement en développement local
+        console.log(`Visitez http://localhost:${port}/api/status pour vérifier la connexion à la base de données.`);
+    }
 });
