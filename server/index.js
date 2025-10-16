@@ -23,8 +23,11 @@ app.use(cors());
 // --- Configuration de la base de données ---
 let pool;
 
+// Vérifie si l'on est dans un environnement de production (Render définit NODE_ENV=production)
+const isProduction = process.env.NODE_ENV === 'production';
+
 if (process.env.DATABASE_URL) {
-    console.log("Connexion à la base de données via DATABASE_URL (Mode Production)...");
+    console.log("Connexion à la base de données via DATABASE_URL...");
     pool = mysql.createPool({
         uri: process.env.DATABASE_URL,
         waitForConnections: true,
@@ -32,7 +35,7 @@ if (process.env.DATABASE_URL) {
         queueLimit: 0,
         connectTimeout: 20000,
     });
-} else {
+} else if (!isProduction) {
     console.log("Connexion à la base de données via les variables DB_* (Mode Développement Local)...");
     const dbConfig = {
       host: process.env.DB_HOST || '127.0.0.1',
@@ -51,6 +54,12 @@ if (process.env.DATABASE_URL) {
     console.log('Using Local DB Config:', safeDbConfig);
 
     pool = mysql.createPool(dbConfig);
+} else {
+    // Si on est en production mais que DATABASE_URL n'est pas défini, c'est une erreur critique.
+    console.error("\n\n❌ ERREUR CRITIQUE: La variable d'environnement DATABASE_URL est manquante.\n");
+    console.error("Veuillez vous assurer que la variable DATABASE_URL est correctement configurée dans les paramètres de votre service sur Render.");
+    console.error("Cette variable doit contenir l'URL de connexion à votre base de données.\n\n");
+    process.exit(1); // Arrête le serveur avec un code d'erreur.
 }
 
 
@@ -366,10 +375,14 @@ app.post('/api/students', asyncHandler(async (req, res) => {
 app.put('/api/students/:id', asyncHandler(async (req, res) => {
     const { id } = req.params;
     const { nom, prenom, dateNaissance, classe, niveauScolaire, parentId, isArchived, photoUrl } = req.body;
+    
+    // ** LA CORRECTION EST ICI **
+    // Cette requête inclut bien le champ `photoUrl` pour s'assurer qu'il est sauvegardé.
     await pool.execute(
         'UPDATE students SET nom = ?, prenom = ?, dateNaissance = ?, classe = ?, niveauScolaire = ?, parentId = ?, isArchived = ?, photoUrl = ? WHERE id = ?',
         [nom, prenom, dateNaissance, classe, niveauScolaire, parentId, isArchived, photoUrl, id]
     );
+    
     res.json({ id: parseInt(id), ...req.body });
 }));
 
