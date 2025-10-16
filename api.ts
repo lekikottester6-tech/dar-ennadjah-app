@@ -18,7 +18,7 @@
 
 import { User, Student, Teacher, Grade, Attendance, Event, Message, TimeTableEntry, Document, DailyMenu, Observation, Notification } from './types';
 
-const BASE_URL = 'http://localhost:3001/api';
+const BASE_URL = 'https://dar-ennadjah-app.onrender.com';
 
 // Helper pour les requêtes API
 async function apiRequest<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
