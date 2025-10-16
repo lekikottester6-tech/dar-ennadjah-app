@@ -374,9 +374,22 @@ app.post('/api/students', asyncHandler(async (req, res) => {
 
 app.put('/api/students/:id', asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const { nom, prenom, dateNaissance, classe, niveauScolaire, parentId, isArchived, photoUrl } = req.body;
+    const [rows] = await pool.execute('SELECT * FROM students WHERE id = ?', [id]);
 
-    // Requête de mise à jour corrigée et clarifiée pour assurer que la photo est bien mise à jour.
+    if (rows.length === 0) {
+        return res.status(404).json({ message: 'Élève non trouvé.' });
+    }
+
+    const existingStudent = rows[0];
+    // Fusionner les données existantes avec les nouvelles données pour ne pas écraser les champs non fournis.
+    const updatedStudentData = {
+        ...existingStudent,
+        ...req.body,
+        id: parseInt(id, 10),
+        // S'assurer que les booléens sont bien gérés (req.body.isArchived peut être `false`)
+        isArchived: req.body.isArchived !== undefined ? req.body.isArchived : existingStudent.isArchived,
+    };
+
     const sql = `
         UPDATE students 
         SET 
@@ -391,20 +404,21 @@ app.put('/api/students/:id', asyncHandler(async (req, res) => {
         WHERE id = ?`;
         
     const params = [
-        nom, 
-        prenom, 
-        dateNaissance, 
-        classe, 
-        niveauScolaire, 
-        parentId, 
-        isArchived, 
-        photoUrl, 
+        updatedStudentData.nom, 
+        updatedStudentData.prenom, 
+        updatedStudentData.dateNaissance, 
+        updatedStudentData.classe, 
+        updatedStudentData.niveauScolaire, 
+        updatedStudentData.parentId, 
+        updatedStudentData.isArchived, 
+        updatedStudentData.photoUrl, 
         id
     ];
 
     await pool.execute(sql, params);
     
-    res.json({ id: parseInt(id), ...req.body });
+    // Retourner l'objet complet et mis à jour
+    res.json(updatedStudentData);
 }));
 
 // Teachers
