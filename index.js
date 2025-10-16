@@ -238,6 +238,8 @@ async function initializeDatabase(retries = 3, delay = 5000) {
                 }
             } catch (adminCheckError) {
                 console.error("❌ Erreur lors de la vérification/création du compte admin :", adminCheckError.message);
+                // On relance l'erreur pour que la tentative d'initialisation échoue et puisse être réessayée.
+                throw adminCheckError;
             }
             
             connection.release();
