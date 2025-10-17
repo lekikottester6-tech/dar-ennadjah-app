@@ -11,6 +11,7 @@ import { User, Student } from '../../types';
 import * as api from '../../api';
 import WhatsAppIcon from '../../components/icons/WhatsAppIcon';
 import PhoneOutgoingIcon from '../../components/icons/PhoneOutgoingIcon';
+import MailIcon from '../../components/icons/MailIcon';
 
 interface ParentManagementProps {
     parents: User[];
@@ -64,6 +65,17 @@ const ParentManagement: React.FC<ParentManagementProps> = ({ parents, students, 
         }
     }, [initialSearchQuery]);
     
+    const formatWhatsAppNumber = (phone: string | undefined | null): string => {
+        if (!phone) return '';
+        let formattedPhone = phone.replace(/\s+/g, ''); // remove spaces
+        if (formattedPhone.startsWith('0')) {
+            formattedPhone = '213' + formattedPhone.substring(1);
+        } else if (formattedPhone.startsWith('+')) {
+            formattedPhone = formattedPhone.substring(1);
+        }
+        return formattedPhone;
+    };
+
     const filteredParents = useMemo(() => {
         if (!searchQuery.trim()) {
             return parents;
@@ -170,11 +182,11 @@ const ParentManagement: React.FC<ParentManagementProps> = ({ parents, students, 
                     closeAllModals();
                 }
             } catch (error: any) {
-                // If the server still reports a duplicate (e.g., race condition), show it in the form.
-                if (error.message && error.message.toLowerCase().includes('duplicate entry')) {
+                if (error.message && error.message.toLowerCase().includes('déjà utilisée')) {
                      setFormErrors(prev => ({...prev, email: "Cette adresse email est déjà utilisée."}));
                 } else {
                      console.error("Failed to add parent:", error);
+                     addToast(error.message || "Une erreur est survenue lors de l'ajout du parent.", 'error');
                 }
             }
         }
@@ -192,14 +204,8 @@ const ParentManagement: React.FC<ParentManagementProps> = ({ parents, students, 
             addToast("Informations du parent manquantes pour l'envoi WhatsApp.", "error");
             return;
         }
-    
-        // Formatter le numéro de téléphone pour WhatsApp (ex: 0661... -> 213661...)
-        let formattedPhone = parent.telephone.replace(/\s+/g, ''); // enlever les espaces
-        if (formattedPhone.startsWith('0')) {
-            formattedPhone = '213' + formattedPhone.substring(1);
-        } else if (formattedPhone.startsWith('+')) {
-            formattedPhone = formattedPhone.substring(1);
-        }
+        
+        const formattedPhone = formatWhatsAppNumber(parent.telephone);
         
         const message = `Bonjour ${parent.nom},\n\nVoici vos identifiants pour accéder à l'espace parent de Dar Ennadjah :\n\n*Email :* ${parent.email}\n*Mot de passe :* ${newPassword}\n\nCordialement,\nL'administration de Dar Ennadjah`;
         const encodedMessage = encodeURIComponent(message);
@@ -249,15 +255,29 @@ const ParentManagement: React.FC<ParentManagementProps> = ({ parents, students, 
                             <tr key={parent.id} className="even:bg-slate-50">
                                 <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{parent.nom}</td>
                                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                                    <div>{parent.email}</div>
-                                    <div className="text-xs flex items-center space-x-2">
-                                        <span>{parent.telephone}</span>
-                                        {parent.telephone && (
-                                            <a href={`tel:${parent.telephone.replace(/\s/g, '')}`} className="p-1 rounded-full text-green-600 hover:bg-green-100 transition-colors" aria-label={`Appeler ${parent.nom}`}>
-                                                <PhoneOutgoingIcon className="h-4 w-4" />
+                                    <a href={`mailto:${parent.email}`} className="flex items-center space-x-2 text-slate-600 hover:text-royal-blue transition-colors">
+                                        <MailIcon className="h-4 w-4 flex-shrink-0" />
+                                        <span>{parent.email}</span>
+                                    </a>
+                                    {parent.telephone ? (
+                                        <div className="flex items-center space-x-3 mt-1">
+                                            <a href={`tel:${parent.telephone.replace(/\s/g, '')}`} className="flex items-center space-x-2 text-slate-600 hover:text-royal-blue transition-colors">
+                                                <PhoneOutgoingIcon className="h-4 w-4 flex-shrink-0" />
+                                                <span>{parent.telephone}</span>
                                             </a>
-                                        )}
-                                    </div>
+                                            <a 
+                                                href={`https://wa.me/${formatWhatsAppNumber(parent.telephone)}`} 
+                                                target="_blank" 
+                                                rel="noopener noreferrer" 
+                                                className="p-1 rounded-full text-green-600 hover:bg-green-100 transition-colors" 
+                                                aria-label={`Contacter ${parent.nom} sur WhatsApp`}
+                                            >
+                                                <WhatsAppIcon className="h-5 w-5" />
+                                            </a>
+                                        </div>
+                                    ) : (
+                                        <span className="text-xs text-gray-400 mt-1 block">Pas de numéro</span>
+                                    )}
                                 </td>
                                 <td className="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-1">
                                     <Button size="sm" variant="ghost" onClick={() => handleEdit(parent)}><PencilIcon/></Button>
