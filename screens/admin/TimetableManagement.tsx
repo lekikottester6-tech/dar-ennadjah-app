@@ -64,7 +64,7 @@ const TimetableManagement: React.FC<TimetableManagementProps> = ({ timetable, on
         if (!selectedClass) return;
         const normalizedSelectedClass = selectedClass.trim().toLowerCase();
         const updatedClassTimetable = timetable.filter(entry => 
-            entry.classe.trim().toLowerCase() === normalizedSelectedClass && entry.id !== id
+            entry.classe && entry.classe.trim().toLowerCase() === normalizedSelectedClass && entry.id !== id
         );
         onUpdateTimetable(updatedClassTimetable, selectedClass);
     };
@@ -85,7 +85,7 @@ const TimetableManagement: React.FC<TimetableManagementProps> = ({ timetable, on
             );
         } else { // Adding
             const newEntry = {
-                id: Date.now(), // Temporary ID
+                id: Date.now() + Math.random(), // Use a more unique temporary ID
                 ...currentEntry,
             } as TimeTableEntry;
             newTimetableForClass = [...currentClassTimetable, newEntry];
@@ -152,10 +152,10 @@ const TimetableManagement: React.FC<TimetableManagementProps> = ({ timetable, on
                         <tbody className="bg-white divide-y divide-gray-200">
                             {classTimetable.length > 0 ? classTimetable.map(entry => (
                                 <tr key={entry.id}>
-                                    <td className="px-6 py-4 whitespace-nowrap">{entry.day}</td>
-                                    <td className="px-6 py-4 whitespace-nowrap">{entry.time}</td>
-                                    <td className="px-6 py-4 whitespace-nowrap">{entry.subject}</td>
-                                    <td className="px-6 py-4 whitespace-nowrap">{entry.teacher}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-gray-800">{entry.day}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-gray-800">{entry.time}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-gray-800">{entry.subject}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-gray-800">{entry.teacher}</td>
                                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
                                         <Button size="sm" variant="ghost" onClick={() => handleEdit(entry)}><PencilIcon/></Button>
                                         <Button size="sm" variant="ghost" className="text-red-600 hover:bg-red-100" onClick={() => handleDelete(entry.id)}><TrashIcon/></Button>

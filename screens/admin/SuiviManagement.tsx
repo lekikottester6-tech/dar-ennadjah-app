@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import Card from '../../components/common/Card';
 import Button from '../../components/common/Button';
 import Modal from '../../components/common/Modal';
@@ -8,8 +8,7 @@ import PlusIcon from '../../components/icons/PlusIcon';
 import PencilIcon from '../../components/icons/PencilIcon';
 import TrashIcon from '../../components/icons/TrashIcon';
 import SearchIcon from '../../components/icons/SearchIcon';
-import PrintIcon from '../../components/icons/PrintIcon';
-import PrintableStudentFile from './PrintableStudentFile';
+import UserIcon from '../../components/icons/UserIcon';
 
 interface SuiviManagementProps {
     students: Student[];
@@ -35,13 +34,17 @@ const SuiviManagement: React.FC<SuiviManagementProps> = ({ students: allStudents
     const [isGradeModalOpen, setIsGradeModalOpen] = useState(false);
     const [isAttendanceModalOpen, setIsAttendanceModalOpen] = useState(false);
     const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
-    const [isPrintViewOpen, setIsPrintViewOpen] = useState(false);
     
     const [currentGrade, setCurrentGrade] = useState<Partial<Grade> | null>(null);
     const [currentAttendance, setCurrentAttendance] = useState<Partial<Attendance> | null>(null);
     const [itemToDelete, setItemToDelete] = useState<{id: number, type: 'grade' | 'attendance'} | null>(null);
     
     const activeStudents = useMemo(() => allStudents.filter(s => !s.isArchived), [allStudents]);
+
+    const getParentName = useMemo(() => {
+        const parentMap = new Map(parents.map(p => [p.id, p.nom]));
+        return (parentId: number) => parentMap.get(parentId) || '';
+    }, [parents]);
     
     const filteredStudents = useMemo(() => {
         if (!searchQuery.trim()) {
@@ -50,28 +53,25 @@ const SuiviManagement: React.FC<SuiviManagementProps> = ({ students: allStudents
         const lowercasedQuery = searchQuery.toLowerCase();
         return activeStudents.filter(student =>
             `${student.prenom} ${student.nom}`.toLowerCase().includes(lowercasedQuery) ||
-            student.classe.toLowerCase().includes(lowercasedQuery)
+            student.classe.toLowerCase().includes(lowercasedQuery) ||
+            getParentName(student.parentId).toLowerCase().includes(lowercasedQuery)
         );
-    }, [activeStudents, searchQuery]);
+    }, [activeStudents, searchQuery, getParentName]);
 
     const selectedStudent = useMemo(() => allStudents.find(s => s.id === selectedStudentId), [allStudents, selectedStudentId]);
 
     useEffect(() => {
-        if (filteredStudents.length === 1) {
-            if (selectedStudentId !== filteredStudents[0].id) {
-                setSelectedStudentId(filteredStudents[0].id);
-            }
-            return;
-        }
+        // Logique pour auto-sélectionner un élève en fonction de la recherche
+        const isSelectedStudentInList = filteredStudents.some(s => s.id === selectedStudentId);
 
-        if (selectedStudentId && !filteredStudents.some(s => s.id === selectedStudentId)) {
-            setSelectedStudentId(null);
+        // Si aucun élève n'est sélectionné OU si l'élève sélectionné n'est plus dans la liste (à cause du filtre)
+        if (selectedStudentId === null || !isSelectedStudentInList) {
+            // On sélectionne le premier élève de la nouvelle liste filtrée.
+            // Si la liste est vide, on ne sélectionne rien (null).
+            setSelectedStudentId(filteredStudents.length > 0 ? filteredStudents[0].id : null);
         }
-
-        if (!selectedStudentId && searchQuery === '' && filteredStudents.length > 0) {
-            setSelectedStudentId(filteredStudents[0].id);
-        }
-    }, [filteredStudents, searchQuery, selectedStudentId]);
+        // Si l'élève sélectionné est toujours valide, on ne fait rien pour ne pas perturber l'utilisateur.
+    }, [filteredStudents, selectedStudentId]);
 
     const filteredGrades = useMemo(() => {
         let studentGrades = grades.filter(g => g.studentId === selectedStudentId);
@@ -222,7 +222,7 @@ const SuiviManagement: React.FC<SuiviManagementProps> = ({ students: allStudents
                     <input
                         type="text"
                         id="student-search"
-                        placeholder="Rechercher par nom, prénom ou classe..."
+                        placeholder="Rechercher par nom, prénom, classe ou parent..."
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
                         className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-royal-blue"
@@ -255,18 +255,23 @@ const SuiviManagement: React.FC<SuiviManagementProps> = ({ students: allStudents
 
             {selectedStudent ? (
                 <>
-                <div className="bg-royal-blue/10 border-l-4 border-royal-blue p-4 rounded-r-lg mb-6">
-                    <h3 className="text-lg font-semibold text-royal-blue">
-                        Résumé pour {selectedStudent.prenom} {selectedStudent.nom}
-                    </h3>
-                    <div className="flex justify-between items-center">
+                <div className="bg-royal-blue/10 border-l-4 border-royal-blue p-4 rounded-r-lg mb-6 flex items-center space-x-4">
+                    <div className="flex-shrink-0">
+                        {selectedStudent.photoUrl ? (
+                            <img className="h-16 w-16 rounded-full object-cover border-2 border-white shadow-sm" src={selectedStudent.photoUrl} alt={`Photo de ${selectedStudent.prenom}`} />
+                        ) : (
+                            <div className="h-16 w-16 rounded-full bg-slate-200 flex items-center justify-center border-2 border-white shadow-sm">
+                                <UserIcon className="h-8 w-8 text-slate-400" />
+                            </div>
+                        )}
+                    </div>
+                    <div className="flex-grow">
+                        <h3 className="text-lg font-semibold text-royal-blue">
+                            Résumé pour {selectedStudent.prenom} {selectedStudent.nom}
+                        </h3>
                         <p className="text-sm text-slate-600">
                             Classe: {selectedStudent.classe} - Niveau: {selectedStudent.niveauScolaire}
                         </p>
-                        <Button variant="ghost" size="sm" onClick={() => setIsPrintViewOpen(true)}>
-                            <PrintIcon className="w-4 h-4 mr-2" />
-                            Générer Fiche
-                        </Button>
                     </div>
                 </div>
 
@@ -373,17 +378,6 @@ const SuiviManagement: React.FC<SuiviManagementProps> = ({ students: allStudents
                 footer={<><Button variant="ghost" onClick={() => setIsDeleteConfirmOpen(false)}>Annuler</Button><Button variant="danger" onClick={confirmDelete}>Supprimer</Button></>}>
                 <p>Êtes-vous sûr de vouloir supprimer cet élément ? Cette action est irréversible.</p>
             </Modal>
-
-            {isPrintViewOpen && selectedStudent && (
-                 <PrintableStudentFile
-                    student={selectedStudent}
-                    parent={parents.find(p => p.id === selectedStudent.parentId)}
-                    grades={filteredGrades}
-                    attendance={filteredAttendance}
-                    observations={observations.filter(o => o.studentId === selectedStudent.id)}
-                    onClose={() => setIsPrintViewOpen(false)}
-                />
-            )}
         </Card>
     );
 };
