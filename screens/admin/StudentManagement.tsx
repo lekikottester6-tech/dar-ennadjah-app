@@ -14,13 +14,17 @@ import ChevronLeftIcon from '../../components/icons/ChevronLeftIcon';
 import BookOpenIcon from '../../components/icons/BookOpenIcon';
 import ClipboardListIcon from '../../components/icons/ClipboardListIcon';
 import ChatAltIcon from '../../components/icons/ChatAltIcon';
+import PrintableStudentFile from './PrintableStudentFile';
+import PrintIcon from '../../components/icons/PrintIcon';
 
 interface StudentDetailViewProps {
     student: Student;
     parent: User | undefined;
+    grades: Grade[];
     attendance: Attendance[];
     observations: Observation[];
     onBack: () => void;
+    onPrint: () => void;
 }
 
 const InfoSection: React.FC<{ title: string; icon: React.ReactNode; children: React.ReactNode; }> = ({ title, icon, children }) => (
@@ -33,13 +37,19 @@ const InfoSection: React.FC<{ title: string; icon: React.ReactNode; children: Re
     </Card>
 );
 
-const StudentDetailView: React.FC<StudentDetailViewProps> = ({ student, parent, attendance, observations, onBack }) => {
+const StudentDetailView: React.FC<StudentDetailViewProps> = ({ student, parent, grades, attendance, observations, onBack, onPrint }) => {
     return (
         <div className="fade-in">
-            <Button variant="ghost" onClick={onBack} className="mb-4">
-                <ChevronLeftIcon className="mr-2 h-5 w-5" />
-                Retour à la liste des élèves
-            </Button>
+             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4">
+                <Button variant="ghost" onClick={onBack}>
+                    <ChevronLeftIcon className="mr-2 h-5 w-5" />
+                    Retour à la liste des élèves
+                </Button>
+                <Button onClick={onPrint}>
+                    <PrintIcon className="mr-2" />
+                    Imprimer la fiche
+                </Button>
+            </div>
             
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 <div className="lg:col-span-1">
@@ -55,7 +65,7 @@ const StudentDetailView: React.FC<StudentDetailViewProps> = ({ student, parent, 
                         <p className="text-sm text-slate-500">{student.classe}{student.niveauScolaire ? ` - ${student.niveauScolaire}` : ''}</p>
 
                         <div className="mt-6 text-left space-y-3 pt-4 border-t">
-                            <p><strong>Né(e) le :</strong> {new Date(student.dateNaissance).toLocaleDateString('fr-FR')}</p>
+                            <p><strong>Né(e) le :</strong> {student.dateNaissance ? new Date(student.dateNaissance).toLocaleDateString('fr-FR') : 'Non renseignée'}</p>
                             <p><strong>Parent :</strong> {parent?.nom || 'N/A'}</p>
                              <p><strong>Statut :</strong> 
                                 {student.isArchived ? 
@@ -68,6 +78,22 @@ const StudentDetailView: React.FC<StudentDetailViewProps> = ({ student, parent, 
                 </div>
 
                 <div className="lg:col-span-2 space-y-6">
+                    <InfoSection title="Derniers Résultats Scolaires" icon={<BookOpenIcon className="w-6 h-6"/>}>
+                        {grades.length > 0 ? (
+                            <ul className="space-y-2 max-h-60 overflow-y-auto pr-2">
+                                {grades.map(g => (
+                                    <li key={g.id} className="p-2 rounded-md flex justify-between items-center bg-slate-50">
+                                        <div>
+                                            <span className="font-semibold">{g.matiere}: </span>
+                                            <span className="font-bold text-royal-blue">{g.note}/20</span>
+                                        </div>
+                                        <span className="text-xs text-slate-500">{new Date(g.date).toLocaleDateString('fr-FR')}</span>
+                                    </li>
+                                ))}
+                            </ul>
+                        ) : <p className="text-center text-slate-500 py-4">Aucune note pour cet élève.</p>}
+                    </InfoSection>
+                    
                     <InfoSection title="Suivi des Présences" icon={<ClipboardListIcon className="w-6 h-6"/>}>
                         {attendance.length > 0 ? (
                             <ul className="space-y-2">
@@ -114,6 +140,7 @@ interface StudentManagementProps {
     onAdd: (student: Omit<Student, 'id'>) => Promise<void>;
     onUpdate: (student: Student) => Promise<void>;
     initialSearchQuery: string | null;
+    addToast: (message: string, type?: 'success' | 'error' | 'info') => void;
 }
 
 const InputField: React.FC<{ 
@@ -155,7 +182,7 @@ const ViewButton: React.FC<{
     </Button>
 );
 
-const StudentManagement: React.FC<StudentManagementProps> = ({ students, parents, grades, attendance, observations, onAdd, onUpdate, initialSearchQuery }) => {
+const StudentManagement: React.FC<StudentManagementProps> = ({ students, parents, grades, attendance, observations, onAdd, onUpdate, initialSearchQuery, addToast }) => {
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [isArchiveConfirmOpen, setIsArchiveConfirmOpen] = useState(false);
     const [currentStudent, setCurrentStudent] = useState<Partial<Student> | null>(null);
@@ -167,6 +194,7 @@ const StudentManagement: React.FC<StudentManagementProps> = ({ students, parents
     const [isCameraOpen, setIsCameraOpen] = useState(false);
     const [viewingStudent, setViewingStudent] = useState<Student | null>(null);
     const [isSaving, setIsSaving] = useState(false);
+    const [isPrintableViewOpen, setIsPrintableViewOpen] = useState(false);
 
     useEffect(() => {
         if (initialSearchQuery) {
@@ -250,9 +278,11 @@ const StudentManagement: React.FC<StudentManagementProps> = ({ students, parents
         const errors: { [key: string]: string } = {};
         if (!currentStudent?.nom?.trim()) errors.nom = "Le nom est requis.";
         if (!currentStudent?.prenom?.trim()) errors.prenom = "Le prénom est requis.";
-        if (!currentStudent?.dateNaissance?.trim()) errors.dateNaissance = "La date de naissance est requise.";
         if (!currentStudent?.classe?.trim()) errors.classe = "La classe est requise.";
         if (!currentStudent?.parentId) errors.parentId = "Le parent est requis.";
+        if (!selectedPhoto && !currentStudent?.photoUrl) {
+            errors.photo = "La photo de l'élève est obligatoire.";
+        }
         setFormErrors(errors);
         return Object.keys(errors).length === 0;
     };
@@ -262,7 +292,12 @@ const StudentManagement: React.FC<StudentManagementProps> = ({ students, parents
         
         setIsSaving(true);
         try {
-            let studentToSave = { ...currentStudent };
+            let studentToSave: Partial<Student> = { ...currentStudent };
+
+            // Assurer que la date de naissance vide est envoyée comme nulle
+            if (studentToSave.dateNaissance === '') {
+                delete studentToSave.dateNaissance;
+            }
     
             if (selectedPhoto) {
                 try {
@@ -270,7 +305,7 @@ const StudentManagement: React.FC<StudentManagementProps> = ({ students, parents
                     studentToSave.photoUrl = uploadResult.photoUrl;
                 } catch (error) {
                     console.error("Photo upload failed:", error);
-                    setFormErrors(prev => ({ ...prev, photo: "Échec du téléchargement de la photo." }));
+                    addToast("L'ajout de la photo a échoué. L'enregistrement de l'élève a été annulé.", "error");
                     setIsSaving(false);
                     return;
                 }
@@ -278,11 +313,17 @@ const StudentManagement: React.FC<StudentManagementProps> = ({ students, parents
     
             if (studentToSave.id) {
                 await onUpdate(studentToSave as Student);
+                addToast("Élève mis à jour avec succès.", "success");
             } else {
                 await onAdd(studentToSave as Omit<Student, 'id'>);
+                addToast("Élève ajouté avec succès.", "success");
             }
             closeModal();
-        } finally {
+        } catch(error: any) {
+            console.error("Failed to save student:", error);
+            addToast(error.message || "Erreur lors de la sauvegarde de l'élève.", "error");
+        }
+        finally {
             setIsSaving(false);
         }
     };
@@ -320,17 +361,32 @@ const StudentManagement: React.FC<StudentManagementProps> = ({ students, parents
     
     if (viewingStudent) {
         const studentParent = parents.find(p => p.id === viewingStudent.parentId);
+        const studentGrades = grades.filter(g => g.studentId === viewingStudent.id).sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime());
         const studentAttendance = attendance.filter(a => a.studentId === viewingStudent.id).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
         const studentObservations = observations.filter(o => o.studentId === viewingStudent.id).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
         
         return (
-            <StudentDetailView 
-                student={viewingStudent}
-                parent={studentParent}
-                attendance={studentAttendance}
-                observations={studentObservations}
-                onBack={handleBackToList}
-            />
+            <>
+                <StudentDetailView 
+                    student={viewingStudent}
+                    parent={studentParent}
+                    grades={studentGrades}
+                    attendance={studentAttendance}
+                    observations={studentObservations}
+                    onBack={handleBackToList}
+                    onPrint={() => setIsPrintableViewOpen(true)}
+                />
+                {isPrintableViewOpen && (
+                    <PrintableStudentFile
+                        student={viewingStudent}
+                        parent={studentParent}
+                        grades={studentGrades}
+                        attendance={studentAttendance}
+                        observations={studentObservations}
+                        onClose={() => setIsPrintableViewOpen(false)}
+                    />
+                )}
+            </>
         );
     }
 
@@ -427,7 +483,7 @@ const StudentManagement: React.FC<StudentManagementProps> = ({ students, parents
                 ) : (
                     <div className="space-y-4">
                         <div>
-                            <label className="block text-sm font-medium text-gray-700">Photo de l'élève</label>
+                            <label className="block text-sm font-medium text-gray-700">Photo de l'élève (obligatoire)</label>
                             <div className="mt-2 flex items-center space-x-4">
                                 <div className="h-20 w-20 rounded-full bg-slate-100 flex items-center justify-center overflow-hidden border">
                                     {selectedPhoto ? (
@@ -454,7 +510,7 @@ const StudentManagement: React.FC<StudentManagementProps> = ({ students, parents
 
                         <InputField name="nom" label="Nom" currentStudent={currentStudent} handleFormChange={handleFormChange} formErrors={formErrors} />
                         <InputField name="prenom" label="Prénom" currentStudent={currentStudent} handleFormChange={handleFormChange} formErrors={formErrors} />
-                        <InputField name="dateNaissance" label="Date de Naissance" type="date" currentStudent={currentStudent} handleFormChange={handleFormChange} formErrors={formErrors} />
+                        <InputField name="dateNaissance" label="Date de Naissance (optionnel)" type="date" currentStudent={currentStudent} handleFormChange={handleFormChange} formErrors={formErrors} />
                         <InputField name="niveauScolaire" label="Niveau Scolaire (optionnel)" currentStudent={currentStudent} handleFormChange={handleFormChange} formErrors={formErrors} />
                         <InputField name="classe" label="Classe" currentStudent={currentStudent} handleFormChange={handleFormChange} formErrors={formErrors} />
                         <div>

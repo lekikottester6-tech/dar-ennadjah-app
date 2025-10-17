@@ -1,4 +1,3 @@
-
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -154,6 +153,17 @@ app.post(`${API_PREFIX}/users/:id/reset-password`, async (req, res) => {
 
 // Generic CRUD for simple tables
 const createCrudEndpoints = (tableName) => {
+    const sanitizeValue = (value) => {
+        if (value === undefined) {
+            return null;
+        }
+        // Convert arrays and objects to JSON strings for database storage
+        if (typeof value === 'object' && value !== null) {
+            return JSON.stringify(value);
+        }
+        return value;
+    };
+
     app.get(`${API_PREFIX}/${tableName}`, async (req, res) => {
         try {
             const [rows] = await db.query(`SELECT * FROM ${tableName}`);
@@ -164,23 +174,25 @@ const createCrudEndpoints = (tableName) => {
     });
 
     app.post(`${API_PREFIX}/${tableName}`, async (req, res) => {
-        const columns = Object.keys(req.body).join(', ');
-        const placeholders = Object.keys(req.body).map(() => '?').join(', ');
-        const values = Object.values(req.body);
+        const { id, ...data } = req.body; // Safely remove id if present
+        const columns = Object.keys(data).join(', ');
+        const placeholders = Object.keys(data).map(() => '?').join(', ');
+        const values = Object.values(data).map(sanitizeValue);
         try {
             const [result] = await db.query(`INSERT INTO ${tableName} (${columns}) VALUES (${placeholders})`, values);
-            res.status(201).json({ id: result.insertId, ...req.body });
+            res.status(201).json({ id: result.insertId, ...data });
         } catch (error) {
             res.status(500).json({ message: error.message });
         }
     });
 
     app.put(`${API_PREFIX}/${tableName}/:id`, async (req, res) => {
-        const updates = Object.keys(req.body).map(key => `${key} = ?`).join(', ');
-        const values = [...Object.values(req.body), req.params.id];
+        const { id, ...data } = req.body; // Safely remove id from body to not update it
+        const updates = Object.keys(data).map(key => `${key} = ?`).join(', ');
+        const values = [...Object.values(data).map(sanitizeValue), req.params.id];
         try {
             await db.query(`UPDATE ${tableName} SET ${updates} WHERE id = ?`, values);
-            res.json({ id: req.params.id, ...req.body });
+            res.json({ id: parseInt(req.params.id, 10), ...data });
         } catch (error) {
             res.status(500).json({ message: error.message });
         }
