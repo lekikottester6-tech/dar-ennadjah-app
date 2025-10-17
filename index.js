@@ -62,8 +62,6 @@ async function initializeDatabase() {
     connection = await pool.getConnection();
     console.log('Initialisation de la base de données...');
     
-    // ... (le reste de la fonction d'initialisation de la DB reste inchangé) ...
-    // ... (toutes les créations de tables sont ici) ...
      await connection.query(`CREATE TABLE IF NOT EXISTS users (id INT AUTO_INCREMENT PRIMARY KEY, nom VARCHAR(255) NOT NULL, email VARCHAR(255) NOT NULL UNIQUE, password VARCHAR(255) NOT NULL, role ENUM('admin', 'parent') NOT NULL, telephone VARCHAR(255));`);
      await connection.query(`CREATE TABLE IF NOT EXISTS students (id INT AUTO_INCREMENT PRIMARY KEY, nom VARCHAR(255) NOT NULL, prenom VARCHAR(255) NOT NULL, dateNaissance DATE NOT NULL, classe VARCHAR(255) NOT NULL, niveauScolaire VARCHAR(255), parentId INT NOT NULL, isArchived BOOLEAN DEFAULT FALSE, photoUrl LONGTEXT, FOREIGN KEY (parentId) REFERENCES users(id) ON DELETE CASCADE);`);
      await connection.query(`CREATE TABLE IF NOT EXISTS teachers (id INT AUTO_INCREMENT PRIMARY KEY, nom VARCHAR(255) NOT NULL, prenom VARCHAR(255) NOT NULL, matiere VARCHAR(255) NOT NULL, telephone VARCHAR(255) NOT NULL, photoUrl LONGTEXT, classes JSON);`);
@@ -125,10 +123,6 @@ app.post('/api/users/:id/send-password', asyncHandler(async (req, res) => {
         res.status(500).json({ message: "Erreur lors de l'envoi de l'email." });
     }
 }));
-
-
-// ... (Le reste des routes API reste inchangé) ...
-// ... (toutes les routes de /api/parent-login à /api/notifications/user/:userId/read-all sont ici) ...
 
 // Auth
 app.post('/api/parent-login', asyncHandler(async (req, res) => { const { email, password } = req.body; const [rows] = await pool.execute('SELECT * FROM users WHERE email = ? AND role = ?', [email, 'parent']); if (rows.length === 0 || rows[0].password !== password) { return res.status(401).json({ message: 'Email ou mot de passe incorrect.' }); } const { password: _, ...user } = rows[0]; res.json(user); }));
