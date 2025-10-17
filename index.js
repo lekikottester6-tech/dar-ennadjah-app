@@ -1,3 +1,4 @@
+
 const express = require('express');
 const mysql = require('mysql2/promise');
 const cors = require('cors');
@@ -9,12 +10,15 @@ const PORT = process.env.PORT || 3001;
 
 // Configuration du transporteur Nodemailer (utilisez vos propres informations)
 const transporter = nodemailer.createTransport({
-  service: 'gmail', // ou autre service
+  host: "smtp.gmail.com",
+  port: 465,
+  secure: true, // true for 465, false for other ports
   auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
+    user: process.env.EMAIL_USER, // Votre adresse e-mail Gmail complète
+    pass: process.env.EMAIL_PASS, // Le mot de passe d'application de 16 caractères
   },
 });
+
 
 // Augmenter la limite de la taille du corps de la requête pour les photos en Base64
 app.use(express.json({ limit: '10mb' }));
@@ -107,7 +111,7 @@ async function initializeDatabase() {
             classes JSON
         );
     `);
-    
+
     await connection.query(`
       CREATE TABLE IF NOT EXISTS grades (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -294,7 +298,7 @@ const addNotification = async (userId, message, type, link) => {
     try {
         await pool.execute(
             'INSERT INTO notifications (userId, message, type, link, `read`, timestamp) VALUES (?, ?, ?, ?, ?, ?)',
-            [userId, message, type, link, false, new Date()]
+            [userId ?? null, message, type, link ?? null, false, new Date()]
         );
     } catch (error) {
         console.error("Erreur lors de l'ajout de la notification:", error);
@@ -352,7 +356,7 @@ app.post('/api/users', asyncHandler(async (req, res) => {
     const { nom, email, telephone } = req.body;
     const generatedPassword = generateRandomPassword();
     try {
-        const [result] = await pool.execute('INSERT INTO users (nom, email, password, role, telephone) VALUES (?, ?, ?, ?, ?)', [nom, email, generatedPassword, 'parent', telephone]);
+        const [result] = await pool.execute('INSERT INTO users (nom, email, password, role, telephone) VALUES (?, ?, ?, ?, ?)', [nom, email, generatedPassword, 'parent', telephone ?? null]);
         res.status(201).json({ id: result.insertId, nom, email, role: 'parent', telephone, generatedPassword });
     } catch (error) {
         if (error.code === 'ER_DUP_ENTRY') {
@@ -363,7 +367,7 @@ app.post('/api/users', asyncHandler(async (req, res) => {
 }));
 app.put('/api/users/:id', asyncHandler(async (req, res) => {
     const { nom, email, telephone } = req.body;
-    await pool.execute('UPDATE users SET nom = ?, email = ?, telephone = ? WHERE id = ?', [nom, email, telephone, req.params.id]);
+    await pool.execute('UPDATE users SET nom = ?, email = ?, telephone = ? WHERE id = ?', [nom, email, telephone ?? null, req.params.id]);
     res.json({ id: parseInt(req.params.id, 10), nom, email, telephone, role: 'parent' });
 }));
 app.delete('/api/users/:id', asyncHandler(async (req, res) => {
@@ -383,7 +387,7 @@ app.post('/api/users/:id/send-password', asyncHandler(async (req, res) => {
     const user = rows[0];
 
     const mailOptions = {
-        from: process.env.EMAIL_USER,
+        from: `"Dar Ennadjah" <${process.env.EMAIL_USER}>`,
         to: user.email,
         subject: 'Vos identifiants pour Dar Ennadjah',
         html: `<p>Bonjour ${user.nom},</p>
@@ -413,7 +417,7 @@ app.post('/api/students', asyncHandler(async (req, res) => {
     const { nom, prenom, dateNaissance, classe, niveauScolaire, parentId, photoUrl } = req.body;
     const [result] = await pool.execute(
         'INSERT INTO students (nom, prenom, dateNaissance, classe, niveauScolaire, parentId, photoUrl) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        [nom, prenom, dateNaissance, classe, niveauScolaire, parentId, photoUrl]
+        [nom, prenom, dateNaissance, classe, niveauScolaire ?? null, parentId, photoUrl ?? null]
     );
     res.status(201).json({ id: result.insertId, ...req.body });
 }));
@@ -427,12 +431,10 @@ app.put('/api/students/:id', asyncHandler(async (req, res) => {
     }
 
     const existingStudent = rows[0];
-    // Fusionner les données existantes avec les nouvelles données pour ne pas écraser les champs non fournis.
     const updatedStudentData = {
         ...existingStudent,
         ...req.body,
         id: parseInt(id, 10),
-        // S'assurer que les booléens sont bien gérés (req.body.isArchived peut être `false`)
         isArchived: req.body.isArchived !== undefined ? req.body.isArchived : existingStudent.isArchived,
     };
 
@@ -454,52 +456,31 @@ app.put('/api/students/:id', asyncHandler(async (req, res) => {
         updatedStudentData.prenom, 
         updatedStudentData.dateNaissance, 
         updatedStudentData.classe, 
-        updatedStudentData.niveauScolaire, 
+        updatedStudentData.niveauScolaire ?? null, 
         updatedStudentData.parentId, 
         updatedStudentData.isArchived, 
-        updatedStudentData.photoUrl, 
+        updatedStudentData.photoUrl ?? null, 
         id
     ];
 
     await pool.execute(sql, params);
-    
-    // Retourner l'objet complet et mis à jour
     res.json(updatedStudentData);
 }));
 
 // Teachers
 app.get('/api/teachers', asyncHandler(async (req, res) => {
     const [rows] = await pool.execute('SELECT * FROM teachers');
-    const teachers = rows.map(teacher => {
-        let classes = [];
-        if (teacher.classes) {
-            if (typeof teacher.classes === 'string') {
-                try {
-                    // Essayer de parser en tant que JSON, ce qui est le cas idéal '["CP", "CE1"]'
-                    const parsed = JSON.parse(teacher.classes);
-                    if (Array.isArray(parsed)) {
-                        classes = parsed;
-                    }
-                } catch (e) {
-                    // Si le parsing échoue, c'est probablement une chaîne simple 'CP, CE1'
-                    classes = teacher.classes.split(',').map(c => c.trim()).filter(Boolean);
-                }
-            } else if (Array.isArray(teacher.classes)) {
-                // Si c'est déjà un tableau (grâce au driver de la BDD)
-                classes = teacher.classes;
-            }
-        }
-        return { ...teacher, classes };
-    });
+    const teachers = rows.map(teacher => ({
+        ...teacher,
+        classes: teacher.classes ? JSON.parse(teacher.classes) : []
+    }));
     res.json(teachers);
 }));
-
-
 app.post('/api/teachers', asyncHandler(async (req, res) => {
     const { nom, prenom, matiere, telephone, photoUrl, classes } = req.body;
     const [result] = await pool.execute(
         'INSERT INTO teachers (nom, prenom, matiere, telephone, photoUrl, classes) VALUES (?, ?, ?, ?, ?, ?)',
-        [nom, prenom, matiere, telephone, photoUrl, JSON.stringify(classes || [])]
+        [nom, prenom, matiere, telephone, photoUrl ?? null, JSON.stringify(classes ?? [])]
     );
     res.status(201).json({ id: result.insertId, ...req.body });
 }));
@@ -507,15 +488,14 @@ app.put('/api/teachers/:id', asyncHandler(async (req, res) => {
     const { nom, prenom, matiere, telephone, photoUrl, classes } = req.body;
     await pool.execute(
         'UPDATE teachers SET nom = ?, prenom = ?, matiere = ?, telephone = ?, photoUrl = ?, classes = ? WHERE id = ?',
-        [nom, prenom, matiere, telephone, photoUrl, JSON.stringify(classes || []), req.params.id]
+        [nom, prenom, matiere, telephone, photoUrl ?? null, JSON.stringify(classes ?? []), req.params.id]
     );
-    res.json({ id: parseInt(req.params.id), ...req.body });
+    res.json({ id: parseInt(req.params.id, 10), ...req.body });
 }));
 app.delete('/api/teachers/:id', asyncHandler(async (req, res) => {
     await pool.execute('DELETE FROM teachers WHERE id = ?', [req.params.id]);
     res.status(204).send();
 }));
-
 
 // Grades
 app.get('/api/grades', asyncHandler(async (req, res) => { const [rows] = await pool.execute('SELECT * FROM grades'); res.json(rows); }));
@@ -531,7 +511,7 @@ app.post('/api/grades', asyncHandler(async (req, res) => {
 app.put('/api/grades/:id', asyncHandler(async (req, res) => {
     const { studentId, matiere, note, coefficient, periode, date } = req.body;
     await pool.execute('UPDATE grades SET studentId = ?, matiere = ?, note = ?, coefficient = ?, periode = ?, date = ? WHERE id = ?', [studentId, matiere, note, coefficient, periode, date, req.params.id]);
-    res.json({ id: parseInt(req.params.id), ...req.body });
+    res.json({ id: parseInt(req.params.id, 10), ...req.body });
 }));
 app.delete('/api/grades/:id', asyncHandler(async (req, res) => { await pool.execute('DELETE FROM grades WHERE id = ?', [req.params.id]); res.status(204).send(); }));
 
@@ -540,7 +520,7 @@ app.delete('/api/grades/:id', asyncHandler(async (req, res) => { await pool.exec
 app.get('/api/attendance', asyncHandler(async (req, res) => { const [rows] = await pool.execute('SELECT * FROM attendance'); res.json(rows); }));
 app.post('/api/attendance', asyncHandler(async (req, res) => {
     const { studentId, date, statut, justification } = req.body;
-    const [result] = await pool.execute('INSERT INTO attendance (studentId, date, statut, justification) VALUES (?, ?, ?, ?)', [studentId, date, statut, justification]);
+    const [result] = await pool.execute('INSERT INTO attendance (studentId, date, statut, justification) VALUES (?, ?, ?, ?)', [studentId, date, statut, justification ?? null]);
     
     const [studentRows] = await pool.execute('SELECT prenom, parentId FROM students WHERE id = ?', [studentId]);
     const student = studentRows[0];
@@ -570,8 +550,8 @@ app.post('/api/attendance', asyncHandler(async (req, res) => {
 }));
 app.put('/api/attendance/:id', asyncHandler(async (req, res) => {
     const { studentId, date, statut, justification } = req.body;
-    await pool.execute('UPDATE attendance SET studentId = ?, date = ?, statut = ?, justification = ? WHERE id = ?', [studentId, date, statut, justification, req.params.id]);
-    res.json({ id: parseInt(req.params.id), ...req.body });
+    await pool.execute('UPDATE attendance SET studentId = ?, date = ?, statut = ?, justification = ? WHERE id = ?', [studentId, date, statut, justification ?? null, req.params.id]);
+    res.json({ id: parseInt(req.params.id, 10), ...req.body });
 }));
 app.delete('/api/attendance/:id', asyncHandler(async (req, res) => { await pool.execute('DELETE FROM attendance WHERE id = ?', [req.params.id]); res.status(204).send(); }));
 
@@ -590,7 +570,7 @@ app.post('/api/observations', asyncHandler(async (req, res) => {
 app.put('/api/observations/:id', asyncHandler(async (req, res) => {
     const { studentId, date, content, author } = req.body;
     await pool.execute('UPDATE observations SET studentId = ?, date = ?, content = ?, author = ? WHERE id = ?', [studentId, date, content, author, req.params.id]);
-    res.json({ id: parseInt(req.params.id), ...req.body });
+    res.json({ id: parseInt(req.params.id, 10), ...req.body });
 }));
 app.delete('/api/observations/:id', asyncHandler(async (req, res) => { await pool.execute('DELETE FROM observations WHERE id = ?', [req.params.id]); res.status(204).send(); }));
 
@@ -623,7 +603,6 @@ app.get('/api/messages', asyncHandler(async (req, res) => { const [rows] = await
 app.post('/api/messages', asyncHandler(async (req, res) => {
     const { senderId, receiverId, contenu, date, attachmentName, attachmentUrl } = req.body;
     
-    // Vérifier si les utilisateurs existent avant d'envoyer le message
     const [senderExists] = await pool.execute('SELECT id FROM users WHERE id = ?', [senderId]);
     const [receiverExists] = await pool.execute('SELECT id FROM users WHERE id = ?', [receiverId]);
     if (senderExists.length === 0 || receiverExists.length === 0) {
@@ -632,25 +611,25 @@ app.post('/api/messages', asyncHandler(async (req, res) => {
 
     const [result] = await pool.execute(
         'INSERT INTO messages (senderId, receiverId, contenu, date, attachmentName, attachmentUrl) VALUES (?, ?, ?, ?, ?, ?)',
-        [senderId, receiverId, contenu, date, attachmentName, attachmentUrl]
+        [senderId, receiverId, contenu ?? null, date, attachmentName ?? null, attachmentUrl ?? null]
     );
     res.status(201).json({ id: result.insertId, ...req.body });
 }));
 
 // Events, Documents, Menus... (le reste des endpoints)
 app.get('/api/events', asyncHandler(async (req, res) => { const [rows] = await pool.execute('SELECT * FROM events ORDER BY event_date DESC'); res.json(rows); }));
-app.post('/api/events', asyncHandler(async (req, res) => { const { title, description, event_date } = req.body; const [result] = await pool.execute('INSERT INTO events (title, description, event_date) VALUES (?, ?, ?)', [title, description, event_date]); res.status(201).json({ id: result.insertId, ...req.body }); }));
-app.put('/api/events/:id', asyncHandler(async (req, res) => { const { title, description, event_date } = req.body; await pool.execute('UPDATE events SET title = ?, description = ?, event_date = ? WHERE id = ?', [title, description, event_date, req.params.id]); res.json({ id: parseInt(req.params.id), ...req.body }); }));
+app.post('/api/events', asyncHandler(async (req, res) => { const { title, description, event_date } = req.body; const [result] = await pool.execute('INSERT INTO events (title, description, event_date) VALUES (?, ?, ?)', [title, description ?? null, event_date]); res.status(201).json({ id: result.insertId, ...req.body }); }));
+app.put('/api/events/:id', asyncHandler(async (req, res) => { const { title, description, event_date } = req.body; await pool.execute('UPDATE events SET title = ?, description = ?, event_date = ? WHERE id = ?', [title, description ?? null, event_date, req.params.id]); res.json({ id: parseInt(req.params.id, 10), ...req.body }); }));
 app.delete('/api/events/:id', asyncHandler(async (req, res) => { await pool.execute('DELETE FROM events WHERE id = ?', [req.params.id]); res.status(204).send(); }));
 
 app.get('/api/documents', asyncHandler(async (req, res) => { const [rows] = await pool.execute('SELECT * FROM documents'); res.json(rows); }));
-app.post('/api/documents', asyncHandler(async (req, res) => { const { title, description, url, mimeType } = req.body; const [result] = await pool.execute('INSERT INTO documents (title, description, url, mimeType) VALUES (?, ?, ?, ?)', [title, description, url, mimeType]); res.status(201).json({ id: result.insertId, ...req.body }); }));
-app.put('/api/documents/:id', asyncHandler(async (req, res) => { const { title, description, url, mimeType } = req.body; await pool.execute('UPDATE documents SET title = ?, description = ?, url = ?, mimeType = ? WHERE id = ?', [title, description, url, mimeType, req.params.id]); res.json({ id: parseInt(req.params.id), ...req.body }); }));
+app.post('/api/documents', asyncHandler(async (req, res) => { const { title, description, url, mimeType } = req.body; const [result] = await pool.execute('INSERT INTO documents (title, description, url, mimeType) VALUES (?, ?, ?, ?)', [title, description ?? null, url, mimeType ?? null]); res.status(201).json({ id: result.insertId, ...req.body }); }));
+app.put('/api/documents/:id', asyncHandler(async (req, res) => { const { title, description, url, mimeType } = req.body; await pool.execute('UPDATE documents SET title = ?, description = ?, url = ?, mimeType = ? WHERE id = ?', [title, description ?? null, url, mimeType ?? null, req.params.id]); res.json({ id: parseInt(req.params.id, 10), ...req.body }); }));
 app.delete('/api/documents/:id', asyncHandler(async (req, res) => { await pool.execute('DELETE FROM documents WHERE id = ?', [req.params.id]); res.status(204).send(); }));
 
 app.get('/api/menus', asyncHandler(async (req, res) => { const [rows] = await pool.execute('SELECT * FROM daily_menus'); res.json(rows); }));
-app.post('/api/menus', asyncHandler(async (req, res) => { const { date, starter, mainCourse, dessert, snack, photoUrl } = req.body; const [result] = await pool.execute('INSERT INTO daily_menus (date, starter, mainCourse, dessert, snack, photoUrl) VALUES (?, ?, ?, ?, ?, ?)', [date, starter, mainCourse, dessert, snack, photoUrl]); res.status(201).json({ id: result.insertId, ...req.body }); }));
-app.put('/api/menus/:id', asyncHandler(async (req, res) => { const { date, starter, mainCourse, dessert, snack, photoUrl } = req.body; await pool.execute('UPDATE daily_menus SET date = ?, starter = ?, mainCourse = ?, dessert = ?, snack = ?, photoUrl = ? WHERE id = ?', [date, starter, mainCourse, dessert, snack, photoUrl, req.params.id]); res.json({ id: parseInt(req.params.id), ...req.body }); }));
+app.post('/api/menus', asyncHandler(async (req, res) => { const { date, starter, mainCourse, dessert, snack, photoUrl } = req.body; const [result] = await pool.execute('INSERT INTO daily_menus (date, starter, mainCourse, dessert, snack, photoUrl) VALUES (?, ?, ?, ?, ?, ?)', [date, starter ?? null, mainCourse ?? null, dessert ?? null, snack ?? null, photoUrl ?? null]); res.status(201).json({ id: result.insertId, ...req.body }); }));
+app.put('/api/menus/:id', asyncHandler(async (req, res) => { const { date, starter, mainCourse, dessert, snack, photoUrl } = req.body; await pool.execute('UPDATE daily_menus SET date = ?, starter = ?, mainCourse = ?, dessert = ?, snack = ?, photoUrl = ? WHERE id = ?', [date, starter ?? null, mainCourse ?? null, dessert ?? null, snack ?? null, photoUrl ?? null, req.params.id]); res.json({ id: parseInt(req.params.id, 10), ...req.body }); }));
 app.delete('/api/menus/:id', asyncHandler(async (req, res) => { await pool.execute('DELETE FROM daily_menus WHERE id = ?', [req.params.id]); res.status(204).send(); }));
 
 // Notifications
@@ -661,7 +640,7 @@ app.post('/api/notifications/user/:userId/read-all', asyncHandler(async (req, re
 
 // Gestionnaire d'erreurs final
 app.use((err, req, res, next) => {
-    console.error(err.stack);
+    console.error("ERROR STACK:", err.stack);
     res.status(500).json({ message: err.message || 'Une erreur interne est survenue.' });
 });
 
