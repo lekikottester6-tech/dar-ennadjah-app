@@ -3,7 +3,6 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const mysql = require('mysql2/promise');
-const nodemailer = require('nodemailer');
 
 const app = express();
 app.use(cors());
@@ -22,43 +21,6 @@ async function connectToDatabase() {
         process.exit(1);
     }
 }
-
-// --- Email Transporter (OAuth2) ---
-let transporter;
-async function setupEmailTransporter() {
-    // Valider que toutes les variables d'environnement nécessaires sont présentes
-    const requiredEnvVars = ['EMAIL_USER', 'OAUTH_CLIENT_ID', 'OAUTH_CLIENT_SECRET', 'OAUTH_REFRESH_TOKEN'];
-    const missingVars = requiredEnvVars.filter(v => !process.env[v]);
-
-    if (missingVars.length > 0) {
-        console.error(`❌ ERREUR CRITIQUE: Variables d'environnement manquantes pour l'email: ${missingVars.join(', ')}`);
-        console.error('Le serveur ne peut pas démarrer sans la configuration complète pour l\'envoi d\'emails.');
-        process.exit(1);
-    }
-
-    transporter = nodemailer.createTransport({
-        host: 'smtp.gmail.com',
-        port: 465,
-        secure: true,
-        auth: {
-            type: 'OAuth2',
-            user: process.env.EMAIL_USER,
-            clientId: process.env.OAUTH_CLIENT_ID,
-            clientSecret: process.env.OAUTH_CLIENT_SECRET,
-            refreshToken: process.env.OAUTH_REFRESH_TOKEN,
-        },
-    });
-
-    try {
-        await transporter.verify();
-        console.log('✅ Connexion au service email (Gmail OAuth2) réussie.');
-    } catch (error) {
-        console.error('❌ ERREUR CRITIQUE: La vérification de la connexion email a échoué.', error);
-        console.error('Veuillez vérifier les variables d\'environnement (OAUTH_...) sur Render et la configuration de votre projet Google Cloud.');
-        process.exit(1); // Arrêter le serveur si la config email est invalide
-    }
-}
-
 
 // --- Utility Functions ---
 const generateRandomPassword = (length = 8) => {
@@ -189,38 +151,6 @@ app.post(`${API_PREFIX}/users/:id/reset-password`, async (req, res) => {
     }
 });
 
-app.post(`${API_PREFIX}/users/:id/send-password`, async (req, res) => {
-    const { password } = req.body;
-    try {
-        const [rows] = await db.query('SELECT nom, email FROM users WHERE id = ?', [req.params.id]);
-        if (rows.length === 0) {
-            return res.status(404).json({ message: "Parent non trouvé." });
-        }
-        const parent = rows[0];
-
-        const mailOptions = {
-            from: `"Dar Ennadjah" <${process.env.EMAIL_USER}>`,
-            to: parent.email,
-            subject: 'Vos identifiants de connexion - Dar Ennadjah',
-            html: `
-                <p>Bonjour ${parent.nom},</p>
-                <p>Voici vos identifiants pour accéder à l'espace parent de Dar Ennadjah :</p>
-                <ul>
-                    <li><strong>Email :</strong> ${parent.email}</li>
-                    <li><strong>Mot de passe :</strong> ${password}</li>
-                </ul>
-                <p>Cordialement,<br>L'administration de Dar Ennadjah</p>
-            `
-        };
-
-        await transporter.sendMail(mailOptions);
-        res.json({ success: true });
-    } catch (error) {
-        console.error("Erreur d'envoi d'email:", error);
-        res.status(500).json({ message: 'Erreur lors de l\'envoi de l\'email.' });
-    }
-});
-
 
 // Generic CRUD for simple tables
 const createCrudEndpoints = (tableName) => {
@@ -337,7 +267,6 @@ app.get(`${API_PREFIX}/messages`, async (req, res) => {
 // --- Start Server ---
 async function startServer() {
     await connectToDatabase();
-    await setupEmailTransporter();
     app.listen(PORT, () => {
         console.log(`🚀 Serveur backend démarré sur http://localhost:${PORT}`);
     });

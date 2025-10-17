@@ -9,7 +9,8 @@ import SearchIcon from '../../components/icons/SearchIcon';
 import KeyIcon from '../../components/icons/KeyIcon';
 import { User, Student } from '../../types';
 import * as api from '../../api';
-import MailIcon from '../../components/icons/MailIcon';
+import WhatsAppIcon from '../../components/icons/WhatsAppIcon';
+import PhoneOutgoingIcon from '../../components/icons/PhoneOutgoingIcon';
 
 interface ParentManagementProps {
     parents: User[];
@@ -19,6 +20,7 @@ interface ParentManagementProps {
     onDelete: (id: number) => Promise<void>;
     onResetPassword: (id: number) => Promise<{ newPassword: string }>;
     initialSearchQuery: string | null;
+    addToast: (message: string, type?: 'success' | 'error' | 'info') => void;
 }
 
 const InputField: React.FC<{
@@ -44,7 +46,7 @@ const InputField: React.FC<{
 );
 
 
-const ParentManagement: React.FC<ParentManagementProps> = ({ parents, students, onAdd, onUpdate, onDelete, onResetPassword, initialSearchQuery }) => {
+const ParentManagement: React.FC<ParentManagementProps> = ({ parents, students, onAdd, onUpdate, onDelete, onResetPassword, initialSearchQuery, addToast }) => {
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
     const [isResetModalOpen, setIsResetModalOpen] = useState(false);
@@ -55,7 +57,6 @@ const ParentManagement: React.FC<ParentManagementProps> = ({ parents, students, 
     const [searchQuery, setSearchQuery] = useState('');
     const [newPassword, setNewPassword] = useState<string | null>(null);
     const [isResetting, setIsResetting] = useState(false);
-    const [emailStatus, setEmailStatus] = useState<'idle' | 'sending' | 'success' | 'error'>('idle');
 
     useEffect(() => {
         if (initialSearchQuery) {
@@ -87,7 +88,6 @@ const ParentManagement: React.FC<ParentManagementProps> = ({ parents, students, 
         setCurrentParent({ nom: '', email: '', telephone: '' });
         setFormErrors({});
         setNewPassword(null);
-        setEmailStatus('idle');
         setIsModalOpen(true);
     };
 
@@ -95,7 +95,6 @@ const ParentManagement: React.FC<ParentManagementProps> = ({ parents, students, 
         setCurrentParent(parent);
         setFormErrors({});
         setNewPassword(null);
-        setEmailStatus('idle');
         setIsModalOpen(true);
     };
 
@@ -107,7 +106,6 @@ const ParentManagement: React.FC<ParentManagementProps> = ({ parents, students, 
     const handleResetPassword = (parent: User) => {
         setParentToReset(parent);
         setNewPassword(null);
-        setEmailStatus('idle');
         setIsResetModalOpen(true);
     };
 
@@ -187,34 +185,34 @@ const ParentManagement: React.FC<ParentManagementProps> = ({ parents, students, 
             setCurrentParent({ ...currentParent, [e.target.name]: e.target.value });
         }
     };
-
-    const handleSendEmail = async () => {
-        const parentId = currentParent?.id || parentToReset?.id;
-        if (!parentId || !newPassword) return;
-
-        setEmailStatus('sending');
-        try {
-            await api.sendPasswordByEmail(parentId, newPassword);
-            setEmailStatus('success');
-        } catch (error) {
-            console.error("Failed to send email", error);
-            setEmailStatus('error');
+    
+    const handleSendWhatsApp = () => {
+        const parent = parentToReset || currentParent;
+        if (!parent || !newPassword || !parent.telephone || !parent.nom || !parent.email) {
+            addToast("Informations du parent manquantes pour l'envoi WhatsApp.", "error");
+            return;
         }
+    
+        // Formatter le numéro de téléphone pour WhatsApp (ex: 0661... -> 213661...)
+        let formattedPhone = parent.telephone.replace(/\s+/g, ''); // enlever les espaces
+        if (formattedPhone.startsWith('0')) {
+            formattedPhone = '213' + formattedPhone.substring(1);
+        } else if (formattedPhone.startsWith('+')) {
+            formattedPhone = formattedPhone.substring(1);
+        }
+        
+        const message = `Bonjour ${parent.nom},\n\nVoici vos identifiants pour accéder à l'espace parent de Dar Ennadjah :\n\n*Email :* ${parent.email}\n*Mot de passe :* ${newPassword}\n\nCordialement,\nL'administration de Dar Ennadjah`;
+        const encodedMessage = encodeURIComponent(message);
+        
+        const whatsappUrl = `https://wa.me/${formattedPhone}?text=${encodedMessage}`;
+        
+        window.open(whatsappUrl, '_blank');
     };
 
     const closeAllModals = () => {
         setIsModalOpen(false); setIsDeleteConfirmOpen(false); setIsResetModalOpen(false);
         setCurrentParent(null); setParentToDelete(null); setParentToReset(null);
-        setNewPassword(null); setEmailStatus('idle');
-    };
-    
-    const getEmailButtonText = () => {
-        switch (emailStatus) {
-            case 'sending': return "Envoi en cours...";
-            case 'success': return "Email Envoyé ✓";
-            case 'error': return "Réessayer";
-            default: return "Envoyer par Email";
-        }
+        setNewPassword(null);
     };
 
     return (
@@ -252,7 +250,14 @@ const ParentManagement: React.FC<ParentManagementProps> = ({ parents, students, 
                                 <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{parent.nom}</td>
                                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                                     <div>{parent.email}</div>
-                                    <div className="text-xs">{parent.telephone}</div>
+                                    <div className="text-xs flex items-center space-x-2">
+                                        <span>{parent.telephone}</span>
+                                        {parent.telephone && (
+                                            <a href={`tel:${parent.telephone.replace(/\s/g, '')}`} className="p-1 rounded-full text-green-600 hover:bg-green-100 transition-colors" aria-label={`Appeler ${parent.nom}`}>
+                                                <PhoneOutgoingIcon className="h-4 w-4" />
+                                            </a>
+                                        )}
+                                    </div>
                                 </td>
                                 <td className="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-1">
                                     <Button size="sm" variant="ghost" onClick={() => handleEdit(parent)}><PencilIcon/></Button>
@@ -274,7 +279,12 @@ const ParentManagement: React.FC<ParentManagementProps> = ({ parents, students, 
                     <div>
                         <p className="text-sm text-gray-600 mb-2">Compte pour <strong>{currentParent?.nom}</strong> créé.</p>
                         <div className="bg-gray-100 p-3 rounded-md text-center"><p className="text-lg font-bold tracking-widest">{newPassword}</p></div>
-                        <div className="mt-4 flex flex-col items-center"><Button onClick={handleSendEmail} disabled={emailStatus === 'sending' || emailStatus === 'success'}><MailIcon className="w-5 h-5 mr-2" />{getEmailButtonText()}</Button></div>
+                        <div className="mt-4 flex flex-col items-center">
+                            <Button onClick={handleSendWhatsApp}>
+                                <WhatsAppIcon className="w-5 h-5 mr-2" />
+                                Envoyer par WhatsApp
+                            </Button>
+                        </div>
                     </div>
                 ) : (
                     <div className="space-y-4">
@@ -292,11 +302,16 @@ const ParentManagement: React.FC<ParentManagementProps> = ({ parents, students, 
                      <div>
                         <p className="text-sm text-gray-600 mb-2">Le nouveau mot de passe est :</p>
                         <div className="bg-gray-100 p-3 rounded-md text-center"><p className="text-lg font-bold tracking-widest">{newPassword}</p></div>
-                        <div className="mt-4 flex flex-col items-center"><Button onClick={handleSendEmail} disabled={emailStatus === 'sending' || emailStatus === 'success'}><MailIcon className="w-5 h-5 mr-2" />{getEmailButtonText()}</Button></div>
+                        <div className="mt-4 flex flex-col items-center">
+                            <Button onClick={handleSendWhatsApp}>
+                                <WhatsAppIcon className="w-5 h-5 mr-2" />
+                                Envoyer par WhatsApp
+                            </Button>
+                        </div>
                     </div>
                 ) : (
                     <div>
-                        <p className="mb-4">Cliquez sur le bouton ci-dessous pour générer un nouveau mot de passe. Le parent ne sera pas notifié à moins que vous ne choisissiez d'envoyer le mot de passe par email.</p>
+                        <p className="mb-4">Cliquez sur le bouton ci-dessous pour générer un nouveau mot de passe. Le parent ne sera pas notifié à moins que vous ne choisissiez d'envoyer le mot de passe via WhatsApp.</p>
                         <Button onClick={confirmResetPassword} disabled={isResetting} className="w-full">{isResetting ? "Génération..." : "Générer un nouveau mot de passe"}</Button>
                     </div>
                 )}
