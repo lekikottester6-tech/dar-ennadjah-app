@@ -35,6 +35,7 @@ import UserGroupIcon from '../../components/icons/UserGroupIcon';
 import CakeIcon from '../../components/icons/CakeIcon';
 import ClassView from './ClassView';
 import BookOpenIcon from '../../components/icons/BookOpenIcon';
+import GestionListItem from '../../components/admin/GestionListItem';
 
 interface AdminDashboardProps {
   currentUser: User;
@@ -231,32 +232,19 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
       case 'dataflow': return <DataFlowExplanation />;
       case 'classView': return <ClassView students={students} parents={parents} teachers={teachers} />;
       case 'gestion':
-        const GestionListItem: React.FC<{label: string, icon: React.ReactNode, onClick: () => void}> = ({label, icon, onClick}) => (
-          <button 
-              onClick={onClick} 
-              className="flex flex-col items-center justify-center text-center w-full h-32 p-2 bg-white rounded-xl shadow-lg border border-slate-100 hover:bg-slate-50 hover:-translate-y-1 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-royal-blue"
-          >
-              <div className="flex items-center justify-center h-12 w-12 bg-royal-blue/10 rounded-full mb-2">
-                  <span className="w-6 h-6 text-royal-blue">
-                      {icon}
-                  </span>
-              </div>
-              <span className="font-semibold text-slate-700 text-sm">{label}</span>
-          </button>
-        );
         return (
             <div>
                 <PageTitle>Gestion</PageTitle>
-                <div className="grid grid-cols-2 gap-4">
-                  <GestionListItem label="Recherche par Classe" icon={<BookOpenIcon/>} onClick={() => setActiveView('classView')} />
-                  <GestionListItem label="Enseignants" icon={<UserGroupIcon/>} onClick={() => setActiveView('teachers')} />
-                  <GestionListItem label="Parents" icon={<UsersIcon/>} onClick={() => setActiveView('parents')} />
-                  <GestionListItem label="Emploi du temps" icon={<ClockIcon/>} onClick={() => setActiveView('timetable')} />
-                  <GestionListItem label="Observations" icon={<ChatAltIcon/>} onClick={() => setActiveView('observations')} />
-                  <GestionListItem label="Événements" icon={<CalendarIcon/>} onClick={() => setActiveView('events')} />
-                  <GestionListItem label="Documents" icon={<DocumentIcon/>} onClick={() => setActiveView('documents')} />
-                  <GestionListItem label="Menu Cantine" icon={<CakeIcon/>} onClick={() => setActiveView('menu')} />
-                  <GestionListItem label="Comment ça marche ?" icon={<InformationCircleIcon/>} onClick={() => setActiveView('dataflow')} />
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <GestionListItem label="Recherche par Classe" icon={<BookOpenIcon/>} onClick={() => setActiveView('classView')} color="sky" />
+                  <GestionListItem label="Enseignants" icon={<UserGroupIcon/>} onClick={() => setActiveView('teachers')} color="green" />
+                  <GestionListItem label="Parents" icon={<UsersIcon/>} onClick={() => setActiveView('parents')} color="purple" />
+                  <GestionListItem label="Emploi du temps" icon={<ClockIcon/>} onClick={() => setActiveView('timetable')} color="amber" />
+                  <GestionListItem label="Observations" icon={<ChatAltIcon/>} onClick={() => setActiveView('observations')} color="rose" />
+                  <GestionListItem label="Événements" icon={<CalendarIcon/>} onClick={() => setActiveView('events')} color="teal" />
+                  <GestionListItem label="Documents" icon={<DocumentIcon/>} onClick={() => setActiveView('documents')} color="indigo" />
+                  <GestionListItem label="Menu Cantine" icon={<CakeIcon/>} onClick={() => setActiveView('menu')} color="pink" />
+                  <GestionListItem label="Comment ça marche ?" icon={<InformationCircleIcon/>} onClick={() => setActiveView('dataflow')} color="slate" />
                 </div>
                 <div className="mt-8 pt-8 border-t border-slate-200">
                     <Button onClick={onLogout} variant="danger" className="w-full">
