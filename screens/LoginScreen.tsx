@@ -30,14 +30,14 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
     setLoading(true);
 
     if (role === UserRole.ADMIN) {
-        setTimeout(() => {
-            if (password === 'admin') {
-                onLogin({ id: 4, nom: 'Admin', email: 'admin@enajah.com', role: UserRole.ADMIN, telephone: '' });
-            } else {
-                setError('Mot de passe incorrect.');
-            }
+        try {
+            const user = await api.adminLogin({ password });
+            onLogin(user);
+        } catch (error: any) {
+            setError(error.message || 'La connexion a échoué. Veuillez réessayer.');
+        } finally {
             setLoading(false);
-        }, 500);
+        }
         return;
     }
     
@@ -91,14 +91,14 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
           <div className="space-y-4">
               {role === UserRole.PARENT && (
                   <div>
-                      <label htmlFor="email" className="sr-only">Email</label>
+                      <label htmlFor="email" className="sr_only">Email</label>
                       <input id="email" name="email" type="email" autoComplete="email" required
                           className="appearance-none rounded-lg relative block w-full px-4 py-3 border border-slate-300 placeholder-slate-500 text-slate-900 focus:outline-none focus:ring-royal-blue focus:border-royal-blue focus:z-10 sm:text-sm"
                           placeholder="Adresse Email" value={email} onChange={(e) => setEmail(e.target.value)} />
                   </div>
               )}
               <div>
-                  <label htmlFor="password" className="sr-only">Mot de passe</label>
+                  <label htmlFor="password" className="sr_only">Mot de passe</label>
                   <input id="password" name="password" type="password" autoComplete="current-password" required
                       className="appearance-none rounded-lg relative block w-full px-4 py-3 border border-slate-300 placeholder-slate-500 text-slate-900 focus:outline-none focus:ring-royal-blue focus:border-royal-blue focus:z-10 sm:text-sm"
                       placeholder="Mot de passe" value={password} onChange={(e) => setPassword(e.target.value)} />
@@ -182,7 +182,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
   );
 
   return (
-    <div className="flex items-center justify-center min-h-screen bg-slate-50 p-4">
+    <div className="flex items-center justify-center min-h-screen bg-slate-200 p-4">
       <div className="w-full max-w-sm mx-auto">
         <div className="text-center mb-8">
             <img src={SCHOOL_LOGO_URL} alt="Dar Ennadjah Logo" className="mx-auto h-24 w-24 rounded-full shadow-lg border-4 border-white"/>

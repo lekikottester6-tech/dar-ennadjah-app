@@ -37,6 +37,7 @@ import ClassView from './ClassView';
 import BookOpenIcon from '../../components/icons/BookOpenIcon';
 
 interface AdminDashboardProps {
+  currentUser: User;
   onLogout: () => void;
   grades: Grade[];
   attendance: Attendance[];
@@ -61,7 +62,7 @@ interface AdminDashboardProps {
 type AdminView = 'dashboard' | 'students' | 'messages' | 'suivi' | 'gestion' | 'teachers' | 'parents' | 'events' | 'documents' | 'timetable' | 'menu' | 'observations' | 'dataflow' | 'classView';
 
 const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
-  const { onLogout, grades, attendance, onAddGrade, onUpdateGrade, onDeleteGrade, onAddAttendance, onUpdateAttendance, onDeleteAttendance, timetable, onUpdateTimetable, observations, onAddObservation, onUpdateObservation, onDeleteObservation, notifications, onMarkAsRead, onMarkAllAsRead, addToast } = props;
+  const { currentUser, onLogout, grades, attendance, onAddGrade, onUpdateGrade, onDeleteGrade, onAddAttendance, onUpdateAttendance, onDeleteAttendance, timetable, onUpdateTimetable, observations, onAddObservation, onUpdateObservation, onDeleteObservation, notifications, onMarkAsRead, onMarkAllAsRead, addToast } = props;
   const [activeView, setActiveView] = useState<AdminView>('dashboard');
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -80,14 +81,28 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-        const [studentsData, teachersData, usersData, eventsData, documentsData, messagesData, menusData] = await Promise.all([
-            api.getStudents(), api.getTeachers(), api.getUsers(), api.getEvents(), api.getDocuments(), api.getMessages(), api.getMenus()
-        ]);
-        setStudents(studentsData); setTeachers(teachersData); setParents(usersData.filter(u => u.role === UserRole.PARENT));
-        setEvents(eventsData); setDocuments(documentsData); setMessages(messagesData); setMenus(menusData);
-    } catch (error) { console.error("Failed to fetch admin data:", error); } 
+        // Fetch data sequentially to avoid overwhelming a "cold start" server.
+        const studentsData = await api.getStudents();
+        const teachersData = await api.getTeachers();
+        const usersData = await api.getUsers();
+        const eventsData = await api.getEvents();
+        const documentsData = await api.getDocuments();
+        const messagesData = await api.getMessages();
+        const menusData = await api.getMenus();
+
+        setStudents(studentsData); 
+        setTeachers(teachersData); 
+        setParents(usersData.filter(u => u.role === UserRole.PARENT));
+        setEvents(eventsData); 
+        setDocuments(documentsData); 
+        setMessages(messagesData); 
+        setMenus(menusData);
+    } catch (error) { 
+        console.error("Failed to fetch admin data:", error);
+        addToast("Impossible de charger les données administrateur. Veuillez réessayer.", "error");
+    } 
     finally { setLoading(false); }
-  }, []);
+  }, [addToast]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -106,7 +121,12 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   const handleAddDocument = async (data: Omit<Document, 'id'>) => { const newDocument = await api.addDocument(data); setDocuments(prev => [...prev, newDocument]); };
   const handleUpdateDocument = async (data: Document) => { const updatedDocument = await api.updateDocument(data); setDocuments(prev => prev.map(d => (d.id === data.id ? updatedDocument : d))); };
   const handleDeleteDocument = async (id: number) => { await api.deleteDocument(id); setDocuments(prev => prev.filter(d => d.id !== id)); };
-  const handleAddMessage = async (data: Omit<Message, 'id'>) => { const newMessage = await api.addMessage(data); setMessages(prev => [...prev, newMessage]); };
+  
+  const handleAddMessage = async (data: Omit<Message, 'id'>) => {
+    await api.addMessage(data);
+    const updatedMessages = await api.getMessages();
+    setMessages(updatedMessages);
+  };
 
   const refreshMenus = async () => {
     try {
@@ -180,18 +200,36 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             </Card>
           </div>
         );
-      case 'students': return <StudentManagement students={students} parents={parents} grades={grades} attendance={attendance} observations={observations} onAdd={handleAddStudent} onUpdate={handleUpdateStudent} initialSearchQuery={initialSearchFilter} />;
+      case 'students': return <StudentManagement students={students} parents={parents} grades={grades} attendance={attendance} observations={observations} onAdd={handleAddStudent} onUpdate={handleUpdateStudent} initialSearchQuery={initialSearchFilter} addToast={addToast} />;
       case 'teachers': return <TeacherManagement teachers={teachers} students={students} onAdd={handleAddTeacher} onUpdate={handleUpdateTeacher} onDelete={handleDeleteTeacher} />;
-      case 'parents': return <ParentManagement parents={parents} students={students} onAdd={handleAddParent} onUpdate={handleUpdateParent} onDelete={handleDeleteParent} onResetPassword={handleResetParentPassword} initialSearchQuery={initialSearchFilter} />;
-      case 'suivi': return <SuiviManagement students={students} parents={parents} observations={observations} loadingStudents={loading} grades={grades} attendance={attendance} {...props} />;
-      case 'observations': return <ObservationManagement observations={observations} {...props} />;
+      case 'parents': return <ParentManagement parents={parents} students={students} onAdd={handleAddParent} onUpdate={handleUpdateParent} onDelete={handleDeleteParent} onResetPassword={handleResetParentPassword} initialSearchQuery={initialSearchFilter} addToast={addToast} />;
+      case 'suivi': return <SuiviManagement 
+                                students={students} 
+                                parents={parents} 
+                                observations={observations} 
+                                loadingStudents={loading} 
+                                grades={grades} 
+                                attendance={attendance} 
+                                onAddGrade={onAddGrade}
+                                onUpdateGrade={onUpdateGrade}
+                                onDeleteGrade={onDeleteGrade}
+                                onAddAttendance={onAddAttendance}
+                                onUpdateAttendance={onUpdateAttendance}
+                                onDeleteAttendance={onDeleteAttendance}
+                            />;
+      case 'observations': return <ObservationManagement 
+                                      observations={observations} 
+                                      onAddObservation={onAddObservation} 
+                                      onUpdateObservation={onUpdateObservation} 
+                                      onDeleteObservation={onDeleteObservation} 
+                                    />;
       case 'timetable': return <TimetableManagement timetable={timetable} onUpdateTimetable={onUpdateTimetable} />;
       case 'events': return <EventManagement events={events} onAdd={handleAddEvent} onUpdate={handleUpdateEvent} onDelete={handleDeleteEvent} />;
-      case 'messages': return <CommunicationManagement messages={messages} parents={parents} onAddMessage={handleAddMessage} onBack={() => setActiveView('dashboard')} />;
+      case 'messages': return <CommunicationManagement messages={messages} parents={parents} adminUser={currentUser} onAddMessage={handleAddMessage} onBack={() => setActiveView('dashboard')} addToast={addToast} />;
       case 'documents': return <DocumentManagement documents={documents} onAdd={handleAddDocument} onUpdate={handleUpdateDocument} onDelete={handleDeleteDocument} />;
       case 'menu': return <MenuManagement menus={menus} onAddMenu={handleAddMenu} onUpdateMenu={handleUpdateMenu} onDeleteMenu={handleDeleteMenu} addToast={addToast} />;
       case 'dataflow': return <DataFlowExplanation />;
-      case 'classView': return <ClassView students={students} parents={parents} />;
+      case 'classView': return <ClassView students={students} parents={parents} teachers={teachers} />;
       case 'gestion':
         const GestionListItem: React.FC<{label: string, icon: React.ReactNode, onClick: () => void}> = ({label, icon, onClick}) => (
           <button 
@@ -210,7 +248,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             <div>
                 <PageTitle>Gestion</PageTitle>
                 <div className="grid grid-cols-2 gap-4">
-                  <GestionListItem label="Élèves par Classe" icon={<BookOpenIcon/>} onClick={() => setActiveView('classView')} />
+                  <GestionListItem label="Recherche par Classe" icon={<BookOpenIcon/>} onClick={() => setActiveView('classView')} />
                   <GestionListItem label="Enseignants" icon={<UserGroupIcon/>} onClick={() => setActiveView('teachers')} />
                   <GestionListItem label="Parents" icon={<UsersIcon/>} onClick={() => setActiveView('parents')} />
                   <GestionListItem label="Emploi du temps" icon={<ClockIcon/>} onClick={() => setActiveView('timetable')} />
@@ -246,7 +284,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
   ];
 
   return (
-    <div className="h-screen flex flex-col bg-slate-50 text-slate-900">
+    <div className="h-screen flex flex-col bg-slate-200 text-slate-900">
       <AdminMobileHeader
         unreadCount={notifications.filter(n => !n.read).length}
         onBellClick={() => setIsNotificationsOpen(p => !p)}

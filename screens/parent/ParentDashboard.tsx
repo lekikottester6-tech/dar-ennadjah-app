@@ -34,6 +34,7 @@ import PaperClipIcon from '../../components/icons/PaperClipIcon';
 import XCircleIcon from '../../components/icons/XCircleIcon';
 import CheckCircleIcon from '../../components/icons/CheckCircleIcon';
 import ImageWithPreview from '../../components/common/ImageWithPreview';
+import CalendarMinusIcon from '../../components/icons/CalendarMinusIcon';
 
 interface ParentDashboardProps {
   currentUser: User;
@@ -105,6 +106,25 @@ const PlusGridItem: React.FC<{label: string, icon: React.ReactNode, onClick: () 
   </button>
 );
 
+const SummaryItem: React.FC<{
+    icon: React.ReactNode;
+    label: string;
+    value: React.ReactNode;
+    detail?: string;
+    onClick: () => void;
+    colorClass?: string;
+}> = ({ icon, label, value, detail, onClick, colorClass = 'bg-royal-blue/10 text-royal-blue' }) => (
+    <button onClick={onClick} className="flex items-center w-full p-3 bg-white rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200 border border-slate-100">
+        <div className={`flex-shrink-0 w-12 h-12 rounded-full flex items-center justify-center ${colorClass}`}>
+            {icon}
+        </div>
+        <div className="ml-4 text-left flex-grow overflow-hidden">
+            <p className="text-sm font-semibold text-slate-500">{label}</p>
+            <p className="text-base font-bold text-slate-800 truncate">{value}</p>
+        </div>
+        <ChevronRightIcon className="w-5 h-5 text-slate-400 flex-shrink-0 ml-2" />
+    </button>
+);
 
 const ParentDashboard: React.FC<ParentDashboardProps> = ({ currentUser, onLogout, grades, attendance, timetable, menus, observations, notifications, onMarkAsRead, onMarkAllAsRead, addToast }) => {
   const [activeView, setActiveView] = useState<ParentView>('dashboard');
@@ -353,14 +373,64 @@ const ParentDashboard: React.FC<ParentDashboardProps> = ({ currentUser, onLogout
 
     const studentTimetable = timetable.filter(t => t.classe === selectedStudent.classe);
     const latestObservation = studentObservations[0];
-    const todayString = getLocalDateString(new Date());
-    const menuForToday = menus.find(m => m.date && m.date.startsWith(todayString));
 
     switch (activeView) {
       case 'dashboard':
+        const todayString = getLocalDateString(new Date());
+        const menuForToday = menus.find(m => m.date && m.date.startsWith(todayString));
+        const latestGradeToday = studentGrades.find(g => g.date && g.date.startsWith(todayString));
+        const attendanceForToday = studentAttendance.find(a => a.date && a.date.startsWith(todayString));
+
         return (
-          <div className="flex flex-col gap-4">
-            <PageTitle>Tableau de bord</PageTitle>
+          <div className="flex flex-col gap-6">
+            <div className="p-6 bg-header-gradient rounded-2xl text-white shadow-lg -mx-4 -mt-4">
+                <h2 className="text-3xl font-bold">Bonjour, {currentUser.nom.split(' ')[0]} !</h2>
+                <p className="text-white/80 mt-1">{new Date().toLocaleDateString('fr-FR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
+            </div>
+
+            <Card title={`Aujourd'hui pour ${selectedStudent.prenom}`}>
+              <div className="space-y-3">
+                  <SummaryItem 
+                      icon={<MenuBoardIcon className="w-6 h-6" />}
+                      label="Menu du jour"
+                      value={menuForToday ? menuForToday.mainCourse : "Non disponible"}
+                      onClick={() => setActiveView('cantine')}
+                  />
+                  {latestGradeToday ? (
+                      <SummaryItem 
+                          icon={<BookOpenIcon className="w-6 h-6" />}
+                          label="Nouvelle note"
+                          value={`${latestGradeToday.note}/20 en ${latestGradeToday.matiere}`}
+                          onClick={() => { setActiveView('suivi'); setActiveSuiviTab('notes'); }}
+                      />
+                  ) : (
+                       <SummaryItem 
+                          icon={<BookOpenIcon className="w-6 h-6" />}
+                          label="Dernière note"
+                          value="Aucune nouvelle note"
+                          onClick={() => { setActiveView('suivi'); setActiveSuiviTab('notes'); }}
+                      />
+                  )}
+                  {attendanceForToday ? (
+                      <SummaryItem 
+                          icon={<CalendarMinusIcon className="w-6 h-6" />}
+                          label="Suivi présence"
+                          value={attendanceForToday.statut}
+                          colorClass={attendanceForToday.statut.includes("Absent") ? "bg-red-100 text-red-600" : "bg-yellow-100 text-yellow-700"}
+                          onClick={() => { setActiveView('suivi'); setActiveSuiviTab('absences'); }}
+                      />
+                  ) : (
+                      <SummaryItem 
+                          icon={<CheckCircleIcon className="w-6 h-6" />}
+                          label="Suivi présence"
+                          value="Présent(e)"
+                          colorClass="bg-green-100 text-green-600"
+                          onClick={() => { setActiveView('suivi'); setActiveSuiviTab('absences'); }}
+                      />
+                  )}
+              </div>
+            </Card>
+
             <Card title="Dernière Observation" className="bg-yellow-50 border-l-4 border-accent-yellow cursor-pointer" onClick={() => { setActiveView('suivi'); setActiveSuiviTab('observations'); }}>
               {latestObservation ? (
                 <div>
@@ -370,37 +440,7 @@ const ParentDashboard: React.FC<ParentDashboardProps> = ({ currentUser, onLogout
                 </div>
               ) : <p className="text-center text-slate-500 py-4">Aucune observation.</p>}
             </Card>
-            <Card title="Menu du Jour" className="cursor-pointer" onClick={() => setActiveView('cantine')}>
-              {menuForToday ? (
-                <div className="space-y-1 text-sm">
-                  {menuForToday.photoUrl && (
-                    <ImageWithPreview
-                      src={menuForToday.photoUrl}
-                      alt="Repas du jour"
-                      className="w-full aspect-[2/3] rounded-md mb-2"
-                    />
-                  )}
-                  <p><strong>Plat:</strong> {menuForToday.mainCourse}</p>
-                  <p className="text-slate-500 text-xs pt-1 border-t mt-2">Voir le menu de la semaine</p>
-                </div>
-              ) : <p className="text-center text-slate-500 py-4">Menu non disponible.</p>}
-            </Card>
-            <Card title="Dernières Notes" className="cursor-pointer" onClick={() => { setActiveView('suivi'); setActiveSuiviTab('notes'); }}>
-              {studentGrades.length > 0 ? (
-                  studentGrades.slice(0, 3).map(g => (
-                      <div key={g.id} className="flex justify-between items-center text-sm py-1">
-                          <span>{g.matiere}</span>
-                          <div className="flex items-center space-x-2">
-                              <span className="text-xs text-slate-400">{g.date ? new Date(g.date).toLocaleDateString('fr-FR') : ''}</span>
-                              <span className="font-bold text-royal-blue">{g.note}/20</span>
-                          </div>
-                      </div>
-                  ))
-              ) : (
-                  <p className="text-center text-slate-500 py-4">Aucune note pour l'instant.</p>
-              )}
-              {studentGrades.length > 0 && <p className="text-slate-500 text-xs pt-1 border-t mt-2">Voir toutes les notes</p>}
-            </Card>
+            
             <Card title="Dernières Absences">{studentAttendance.slice(0, 2).map(a => <p key={a.id}>{new Date(a.date).toLocaleDateString('fr-FR')}: {a.statut}</p>)}</Card>
           </div>
         );
@@ -833,7 +873,7 @@ const ParentDashboard: React.FC<ParentDashboardProps> = ({ currentUser, onLogout
   ];
 
   return (
-    <div className="h-screen flex flex-col bg-slate-50 text-slate-900">
+    <div className="h-screen flex flex-col bg-slate-200 text-slate-900">
       <ParentMobileHeader
         currentUser={currentUser}
         students={students}
